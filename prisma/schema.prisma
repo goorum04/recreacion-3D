@@ -1,0 +1,33 @@
+// ArchiVR - Prisma schema
+// Software for architects: upload floor plans, recreate in 3D, view in VR
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  // Original uploaded floor plan image (base64 data URL stored separately / file path)
+  image       String
+  // Structured analysis result (JSON string of FloorPlanData)
+  analysis    String
+  // Total floor area in m²
+  area        Float    @default(0)
+  // Number of rooms detected
+  roomCount   Int      @default(0)
+  // Building type detected by the VLM (apartment, house, office...)
+  buildingType String?
+  // Visibility / archive flag
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([createdAt])
+}
