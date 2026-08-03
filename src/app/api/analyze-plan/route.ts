@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import ZAI from 'z-ai-web-dev-sdk';
 import type {
   FloorPlanData,
   WallSegment,
@@ -87,6 +86,52 @@ REAL-WORLD SIZE:
 - ceilingHeightMeters: typical 2.5-3.0.
 
 Output ONLY the JSON. Do not include any text before or after.`;
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+
+/**
+ * Calls Google's Gemini API (free tier available at https://aistudio.google.com/apikey)
+ * with the floor plan image and returns the raw text response.
+ */
+async function callGeminiVision(imageDataUrl: string, apiKey: string): Promise<string> {
+  const match = imageDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error('Formato de imagen no soportado (se requiere data:image/...;base64,...).');
+  }
+  const [, mimeType, base64Data] = match;
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: ANALYSIS_PROMPT },
+              { inline_data: { mime_type: mimeType, data: base64Data } },
+            ],
+          },
+        ],
+        generationConfig: { responseMimeType: 'application/json' },
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Gemini API error (${res.status}): ${errText.slice(0, 500)}`);
+  }
+
+  const json = await res.json();
+  const text: string | undefined = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
+    throw new Error('Gemini no devolvió contenido de texto.');
+  }
+  return text;
+}
 
 /** Strip markdown code fences and leading/trailing prose from a model response. */
 function extractJson(raw: string): string {
@@ -229,22 +274,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const zai = await ZAI.create();
-
-    const response = await zai.chat.completions.createVision({
-      messages: [
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json<AnalyzePlanResponse>(
         {
-          role: 'user',
-          content: [
-            { type: 'text', text: ANALYSIS_PROMPT },
-            { type: 'image_url', image_url: { url: imageDataUrl } },
-          ],
+          success: false,
+          error:
+            'Falta GEMINI_API_KEY. Consigue una clave gratuita en https://aistudio.google.com/apikey y añádela a tu archivo .env.',
         },
-      ],
-      thinking: { type: 'disabled' },
-    });
+        { status: 500 },
+      );
+    }
 
-    const rawContent: string = response.choices?.[0]?.message?.content ?? '';
+    const rawContent = await callGeminiVision(imageDataUrl, apiKey);
 
     let parsed: any;
     try {

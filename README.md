@@ -26,26 +26,26 @@ Software para arquitectos: sube un plano 2D, una IA (VLM) lo analiza y lo recons
 ```bash
 bun install        # o: npm install
 cp .env.example .env
+# añade tu GEMINI_API_KEY en .env (gratis en https://aistudio.google.com/apikey)
 bun run db:push    # crea la base de datos SQLite
 bun run dev
 ```
 
 Abre http://localhost:3000
 
-## Aviso importante: análisis de planos con IA
+## Análisis de planos con IA (Gemini)
 
-El endpoint `src/app/api/analyze-plan/route.ts` usa actualmente el paquete
-`z-ai-web-dev-sdk`, que solo funciona dentro del entorno sandbox de z.ai en el
-que se construyó este proyecto originalmente. **Fuera de ese entorno (por
-ejemplo al desplegar en Vercel u otro hosting), la llamada al VLM fallará**
-porque ese SDK no tiene una API pública ni acepta una clave propia.
+El endpoint `src/app/api/analyze-plan/route.ts` usa la API de **Google Gemini**
+(modelo `gemini-2.5-flash` por defecto, configurable con `GEMINI_MODEL`) para
+analizar la imagen del plano por visión. Gemini tiene un nivel gratuito con
+límite de peticiones, suficiente para probar y usar la app a pequeña escala:
 
-Para que la función de "analizar plano con IA" funcione en tu propio
-despliegue, hay que sustituir esa llamada por un proveedor de visión real
-(por ejemplo la API de Claude/Anthropic, OpenAI, o Google Gemini), usando tu
-propia API key. El resto de la aplicación (visor 3D, VR, mediciones,
-materiales, exportación GLB, historial de proyectos) no depende de ese SDK y
-funciona de forma independiente.
+1. Crea una clave gratuita en https://aistudio.google.com/apikey
+2. Añádela como `GEMINI_API_KEY` en tu `.env`
+
+Si la clave no está configurada, el endpoint devuelve un error explicando cómo
+obtenerla; el resto de la aplicación (visor 3D, VR, mediciones, materiales,
+exportación GLB, historial de proyectos) funciona de forma independiente.
 
 ## Estructura
 
