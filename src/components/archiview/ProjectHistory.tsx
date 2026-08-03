@@ -58,6 +58,7 @@ export function ProjectHistory({ onLoad, refreshKey }: ProjectHistoryProps) {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetchProjects's setState calls happen after an await, not synchronously
     fetchProjects();
   }, [fetchProjects, refreshKey]);
 

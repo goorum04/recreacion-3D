@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Compass as CompassIcon } from 'lucide-react';
+import * as THREE from 'three';
 import { getCameraHandle } from '@/lib/camera-bridge';
 
 /**
@@ -17,7 +18,7 @@ export function CompassOverlay({ className }: { className?: string }) {
   useEffect(() => {
     let raf = 0;
     let last = 0;
-    const dir = { x: 0, y: 0, z: -1 };
+    const dir = new THREE.Vector3(0, 0, -1);
     const tick = (now: number) => {
       if (now - last > 120) {
         last = now;
