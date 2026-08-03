@@ -47,6 +47,29 @@ Si la clave no está configurada, el endpoint devuelve un error explicando cómo
 obtenerla; el resto de la aplicación (visor 3D, VR, mediciones, materiales,
 exportación GLB, historial de proyectos) funciona de forma independiente.
 
+## Desplegar en Railway
+
+El repo incluye `railway.json` (build con Nixpacks, autodetecta Bun a partir
+de `bun.lock`). Pasos:
+
+1. En [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo** → selecciona `goorum04/recreacion-3D` (rama `main`).
+2. En **Variables** del servicio, añade:
+   - `GEMINI_API_KEY` — tu clave gratuita de https://aistudio.google.com/apikey
+   - `DATABASE_URL` — `file:/data/custom.db` (ver volumen abajo)
+3. **Persistencia de la base de datos (importante)**: el filesystem de Railway
+   es efímero entre despliegues. Para que el historial de proyectos
+   sobreviva a un redeploy, añade un **Volume** al servicio montado en `/data`
+   (Settings → Volumes → Add Volume, mount path `/data`) y usa esa ruta en
+   `DATABASE_URL` como en el paso anterior.
+4. Railway detecta el puerto automáticamente vía la variable `PORT` (el
+   servidor standalone de Next.js ya la respeta).
+5. El comando de arranque (`prisma db push --accept-data-loss && bun run
+   start`) crea/actualiza el esquema SQLite en el volumen antes de levantar
+   el servidor, así que no hace falta ejecutarlo a mano.
+
+Sin el volumen, la app funciona igual pero cada redeploy borra los proyectos
+guardados (se recrea la base de datos vacía).
+
 ## Estructura
 
 - `src/app/api/analyze-plan` — análisis del plano con IA (VLM)
