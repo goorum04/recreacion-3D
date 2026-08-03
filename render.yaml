@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: archivr
+    env: node
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npx prisma db push --accept-data-loss && node .next/standalone/server.js
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        value: file:/var/data/custom.db
+    disk:
+      name: archivr-data
+      mountPath: /var/data
+      sizeGB: 1

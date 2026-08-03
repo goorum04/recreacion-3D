@@ -70,6 +70,33 @@ de `bun.lock`). Pasos:
 Sin el volumen, la app funciona igual pero cada redeploy borra los proyectos
 guardados (se recrea la base de datos vacía).
 
+## Desplegar en Render
+
+El repo incluye `render.yaml` (Blueprint). En Render, el runtime es **Node**
+(no Bun) para evitar complicaciones con imágenes Docker propias; el build
+(`next build`) y el arranque (`server.js` standalone) funcionan igual con
+Node.
+
+1. En [render.com](https://render.com) → **New → Blueprint** → conecta
+   `goorum04/recreacion-3D` (rama `main`). Render detecta `render.yaml`
+   automáticamente.
+2. Define la variable `GEMINI_API_KEY` (marcada `sync: false` en el
+   blueprint, así que Render te la pedirá) con tu clave gratuita de
+   https://aistudio.google.com/apikey.
+3. **Persistencia de la base de datos**: el blueprint ya define un **Disk**
+   de 1GB montado en `/var/data`, con `DATABASE_URL=file:/var/data/custom.db`
+   apuntando ahí. Los Disks de Render requieren un plan de pago (`starter` en
+   adelante); en el plan gratuito no hay disco persistente y los datos se
+   pierden en cada redeploy/reinicio — en ese caso cambia `plan: starter` a
+   `plan: free` en `render.yaml` y quita el bloque `disk` (o acepta que el
+   historial de proyectos no persista).
+4. El `startCommand` corre `prisma db push` antes de levantar el servidor,
+   así que el esquema SQLite se crea/actualiza solo en el disco montado.
+
+Si prefieres configurarlo a mano sin Blueprint: **Build Command**
+`npm install && npm run build`, **Start Command** `npx prisma db push
+--accept-data-loss && node .next/standalone/server.js`.
+
 ## Estructura
 
 - `src/app/api/analyze-plan` — análisis del plano con IA (VLM)
