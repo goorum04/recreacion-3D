@@ -97,6 +97,12 @@ Si prefieres configurarlo a mano sin Blueprint: **Build Command**
 `npm install && npm run build`, **Start Command** `npx prisma db push
 --accept-data-loss && node .next/standalone/server.js`.
 
+**Importante**: añade también la variable de entorno `HOSTNAME=0.0.0.0`. Sin
+ella, el servidor standalone de Next.js hereda el `HOSTNAME` interno que
+Render asigna al contenedor y escucha solo en esa interfaz, quedando
+inalcanzable desde fuera (el servicio arranca y se ve "live" en los logs,
+pero la URL pública responde 502).
+
 ## Estructura
 
 - `src/app/api/analyze-plan` — análisis del plano con IA (VLM)

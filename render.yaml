@@ -10,6 +10,8 @@ services:
         sync: false
       - key: DATABASE_URL
         value: file:/var/data/custom.db
+      - key: HOSTNAME
+        value: "0.0.0.0"
     disk:
       name: archivr-data
       mountPath: /var/data
