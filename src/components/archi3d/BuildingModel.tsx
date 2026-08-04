@@ -67,6 +67,37 @@ function Wall({ wall, offsetX, offsetZ, color, wireframe, clippingPlanes = [] }:
 }
 
 /* ------------------------------------------------------------------ */
+/* Corner post (hides the seam where two rotated wall boxes meet)      */
+/* ------------------------------------------------------------------ */
+
+function CornerPost({
+  x,
+  z,
+  height,
+  thickness,
+  offsetX,
+  offsetZ,
+  color,
+  clippingPlanes = [],
+}: {
+  x: number;
+  z: number;
+  height: number;
+  thickness: number;
+  offsetX: number;
+  offsetZ: number;
+  color: string;
+  clippingPlanes?: THREE.Plane[];
+}) {
+  return (
+    <mesh position={[x + offsetX, height / 2, z + offsetZ]} castShadow receiveShadow>
+      <boxGeometry args={[thickness * 1.15, height, thickness * 1.15]} />
+      <meshStandardMaterial color={color} roughness={0.9} clippingPlanes={clippingPlanes} />
+    </mesh>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Door (frame + open gap visual)                                      */
 /* ------------------------------------------------------------------ */
 
@@ -440,6 +471,35 @@ export function BuildingModel({
     [data.walls, offsetX, offsetZ, wallColor, wireframe, clippingPlanes],
   );
 
+  // A small square post at every wall corner hides the diagonal seam where
+  // two rotated wall boxes meet (or end).
+  const cornerPosts = useMemo(() => {
+    const corners = new Map<string, { x: number; z: number; thickness: number }>();
+    for (const w of data.walls) {
+      for (const [x, z] of [[w.x1, w.z1], [w.x2, w.z2]] as const) {
+        const key = `${x.toFixed(2)},${z.toFixed(2)}`;
+        const existing = corners.get(key);
+        const thickness = w.thickness ?? 0.15;
+        if (!existing || thickness > existing.thickness) {
+          corners.set(key, { x, z, thickness });
+        }
+      }
+    }
+    return Array.from(corners.values()).map((c, i) => (
+      <CornerPost
+        key={`corner-${i}`}
+        x={c.x}
+        z={c.z}
+        height={ceilingHeight}
+        thickness={c.thickness}
+        offsetX={offsetX}
+        offsetZ={offsetZ}
+        color={wallColor}
+        clippingPlanes={clippingPlanes}
+      />
+    ));
+  }, [data.walls, ceilingHeight, offsetX, offsetZ, wallColor, clippingPlanes]);
+
   return (
     <group>
       {/* Exterior ground (lawn/terrace) */}
@@ -462,6 +522,7 @@ export function BuildingModel({
 
       {/* Walls */}
       {ly.walls && wallMeshes}
+      {ly.walls && !wireframe && cornerPosts}
 
       {/* Doors */}
       {ly.doors &&

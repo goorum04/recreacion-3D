@@ -59,6 +59,12 @@ WALLS:
 - Each wall is a straight line segment from (x1,z1) to (x2,z2).
 - Trace the OUTER perimeter and INNER partition walls.
 - Walls should connect end-to-end to form closed rooms where possible.
+- Walls MUST be axis-aligned: every segment is either perfectly horizontal
+  (z1 == z2) or perfectly vertical (x1 == x2). Do not output diagonal walls
+  unless the plan clearly shows one.
+- Wall endpoints that meet at a corner MUST use the exact same (x,z) pair
+  in every wall that touches that corner, so corners close cleanly with no
+  gaps or overlaps.
 
 ROOMS:
 - List every enclosed room with a descriptive name (e.g. "Living Room", "Kitchen", "Bedroom", "Bathroom", "Hallway", "Dining").
@@ -164,13 +170,89 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
 }
 
+/**
+ * VLM-detected walls are rarely perfectly axis-aligned or perfectly closed
+ * at corners, which makes the 3D model look skewed with gaps at joints.
+ * This snaps every wall to horizontal/vertical, then clusters nearby
+ * endpoints (within SNAP_TOL) so shared corners land on the exact same
+ * point across every wall that touches them.
+ */
+const SNAP_TOL = 0.3; // meters
+
+function orthogonalizeWalls(walls: WallSegment[]): WallSegment[] {
+  // 1. Force each wall to be perfectly horizontal or vertical, keeping
+  //    whichever axis has the larger extent.
+  const ortho = walls.map((w) => {
+    const dx = w.x2 - w.x1;
+    const dz = w.z2 - w.z1;
+    if (Math.abs(dx) >= Math.abs(dz)) {
+      const z = (w.z1 + w.z2) / 2;
+      return { ...w, z1: z, z2: z };
+    }
+    const x = (w.x1 + w.x2) / 2;
+    return { ...w, x1: x, x2: x };
+  });
+
+  // 2. Cluster nearby endpoints so shared corners coincide exactly.
+  const clusters: { x: number; z: number; n: number }[] = [];
+  const snap = (x: number, z: number) => {
+    for (const c of clusters) {
+      if (Math.abs(c.x - x) < SNAP_TOL && Math.abs(c.z - z) < SNAP_TOL) {
+        c.x = (c.x * c.n + x) / (c.n + 1);
+        c.z = (c.z * c.n + z) / (c.n + 1);
+        c.n += 1;
+        return c;
+      }
+    }
+    const created = { x, z, n: 1 };
+    clusters.push(created);
+    return created;
+  };
+
+  return ortho
+    .map((w) => {
+      const p1 = snap(w.x1, w.z1);
+      const p2 = snap(w.x2, w.z2);
+      return { ...w, x1: p1.x, z1: p1.z, x2: p2.x, z2: p2.z };
+    })
+    .filter((w) => Math.abs(w.x2 - w.x1) + Math.abs(w.z2 - w.z1) > 0.05);
+}
+
+/**
+ * Projects a door/window position onto the nearest wall segment and
+ * returns the point on that wall plus the wall's rotation, so openings
+ * always sit flush in a wall instead of floating at an unrelated angle.
+ */
+function snapToNearestWall(
+  walls: WallSegment[],
+  x: number,
+  z: number,
+): { x: number; z: number; rotation: number } {
+  let best: { x: number; z: number; rotation: number; dist: number } | null = null;
+  for (const w of walls) {
+    const dx = w.x2 - w.x1;
+    const dz = w.z2 - w.z1;
+    const lenSq = dx * dx + dz * dz;
+    if (lenSq < 1e-6) continue;
+    let t = ((x - w.x1) * dx + (z - w.z1) * dz) / lenSq;
+    t = clamp(t, 0.08, 0.92); // keep openings away from corners
+    const px = w.x1 + t * dx;
+    const pz = w.z1 + t * dz;
+    const dist = Math.hypot(px - x, pz - z);
+    if (!best || dist < best.dist) {
+      best = { x: px, z: pz, rotation: Math.atan2(dx, dz), dist };
+    }
+  }
+  return best ? { x: best.x, z: best.z, rotation: best.rotation } : { x, z, rotation: 0 };
+}
+
 /** Validate & sanitize the raw parsed object into a proper FloorPlanData. */
 function normalizePlan(raw: any): FloorPlanData {
   const planWidth = clamp(Number(raw?.estimatedWidthMeters) || 12, 4, 60);
   const planDepth = clamp(Number(raw?.estimatedDepthMeters) || 10, 4, 60);
   const ceilingHeight = clamp(Number(raw?.ceilingHeightMeters) || 2.7, 2.2, 4);
 
-  const walls: WallSegment[] = Array.isArray(raw?.walls)
+  const rawWalls: WallSegment[] = Array.isArray(raw?.walls)
     ? raw.walls
         .map((w: any) => ({
           x1: toMeters(clamp(Number(w?.x1) || 0, 0, 100), planWidth),
@@ -182,6 +264,11 @@ function normalizePlan(raw: any): FloorPlanData {
         }))
         .filter((w: WallSegment) => !(w.x1 === w.x2 && w.z1 === w.z2))
     : [];
+
+  // Snap to axis-aligned walls with coincident corners — the raw VLM output
+  // is rarely perfectly orthogonal/closed, which is what made the 3D model
+  // look skewed with gaps between walls.
+  const walls: WallSegment[] = orthogonalizeWalls(rawWalls);
 
   const rooms: Room[] = Array.isArray(raw?.rooms)
     ? raw.rooms.map((r: any, i: number) => ({
@@ -247,14 +334,26 @@ function normalizePlan(raw: any): FloorPlanData {
     }
   }
 
+  // Snap doors/windows onto the nearest wall so they always sit flush in
+  // the wall instead of floating at whatever raw position/angle the VLM
+  // guessed.
+  const snappedDoors = doors.map((d) => {
+    const snap = snapToNearestWall(walls, d.x, d.z);
+    return { ...d, x: snap.x, z: snap.z, rotation: snap.rotation };
+  });
+  const snappedWindows = windows.map((w) => {
+    const snap = snapToNearestWall(walls, w.x, w.z);
+    return { ...w, x: snap.x, z: snap.z, rotation: snap.rotation };
+  });
+
   return {
     version: 1,
     scale: 1,
     dimensions: { width: planWidth, depth: planDepth, floors: 1 },
     walls,
     rooms,
-    doors,
-    windows,
+    doors: snappedDoors,
+    windows: snappedWindows,
     furniture,
     buildingType: String(raw?.buildingType || 'house'),
     summary: String(raw?.summary || 'Analyzed floor plan'),
