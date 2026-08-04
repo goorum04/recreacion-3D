@@ -101,9 +101,15 @@ Output ONLY the JSON. Do not include any text before or after.`;
 // available to new users" well before its official Oct 2026 shutdown).
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Calls Google's Gemini API (free tier available at https://aistudio.google.com/apikey)
  * with the floor plan image and returns the raw text response.
+ *
+ * The free tier frequently returns 503 "high demand"/429 "rate limited" for
+ * a few seconds at a time — Google's own error message calls these "usually
+ * temporary", so retry a few times with backoff before giving up.
  */
 async function callGeminiVision(imageDataUrl: string, apiKey: string): Promise<string> {
   const match = imageDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
@@ -112,37 +118,50 @@ async function callGeminiVision(imageDataUrl: string, apiKey: string): Promise<s
   }
   const [, mimeType, base64Data] = match;
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-    {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const body = JSON.stringify({
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { text: ANALYSIS_PROMPT },
+          { inline_data: { mime_type: mimeType, data: base64Data } },
+        ],
+      },
+    ],
+    generationConfig: { responseMimeType: 'application/json' },
+  });
+
+  const RETRY_DELAYS_MS = [2000, 5000, 10000];
+  let lastError: Error = new Error('Gemini API: fallo desconocido.');
+
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: ANALYSIS_PROMPT },
-              { inline_data: { mime_type: mimeType, data: base64Data } },
-            ],
-          },
-        ],
-        generationConfig: { responseMimeType: 'application/json' },
-      }),
-    },
-  );
+      body,
+    });
 
-  if (!res.ok) {
+    if (res.ok) {
+      const json = await res.json();
+      const text: string | undefined = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) {
+        throw new Error('Gemini no devolvió contenido de texto.');
+      }
+      return text;
+    }
+
     const errText = await res.text().catch(() => '');
-    throw new Error(`Gemini API error (${res.status}): ${errText.slice(0, 500)}`);
+    lastError = new Error(`Gemini API error (${res.status}): ${errText.slice(0, 500)}`);
+
+    const retryable = res.status === 503 || res.status === 429;
+    if (!retryable || attempt === RETRY_DELAYS_MS.length) {
+      throw lastError;
+    }
+    await sleep(RETRY_DELAYS_MS[attempt]);
   }
 
-  const json = await res.json();
-  const text: string | undefined = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    throw new Error('Gemini no devolvió contenido de texto.');
-  }
-  return text;
+  throw lastError;
 }
 
 /** Strip markdown code fences and leading/trailing prose from a model response. */
@@ -331,8 +350,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json<AnalyzePlanResponse>({ success: true, data });
   } catch (err: any) {
     console.error('[analyze-plan] error', err);
+    const message: string = err?.message || 'Error interno analizando el plano.';
+    const friendly = /Gemini API error \((503|429)\)/.test(message)
+      ? 'El servicio de IA está saturado en este momento (demanda alta en el nivel gratuito de Gemini). Ya se reintentó varias veces automáticamente; espera unos segundos y vuelve a intentarlo.'
+      : message;
     return NextResponse.json<AnalyzePlanResponse>(
-      { success: false, error: err?.message || 'Error interno analizando el plano.' },
+      { success: false, error: friendly },
       { status: 500 },
     );
   }
