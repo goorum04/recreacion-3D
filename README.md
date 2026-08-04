@@ -36,7 +36,9 @@ Abre http://localhost:3000
 ## Análisis de planos con IA (Gemini)
 
 El endpoint `src/app/api/analyze-plan/route.ts` usa la API de **Google Gemini**
-(modelo `gemini-2.5-flash` por defecto, configurable con `GEMINI_MODEL`) para
+(modelo `gemini-flash-latest` por defecto — un alias que Google actualiza
+solo a la última versión estable, para evitar que se rompa cuando
+deprecan una versión concreta — configurable con `GEMINI_MODEL`) para
 analizar la imagen del plano por visión. Gemini tiene un nivel gratuito con
 límite de peticiones, suficiente para probar y usar la app a pequeña escala:
 
