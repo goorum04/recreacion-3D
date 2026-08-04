@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { Html, useCursor } from '@react-three/drei';
-import { buildWallSlabs, type WallSlab } from '@/lib/floor-plan-geometry';
+import { buildWallSlabs, clamp, type WallSlab } from '@/lib/floor-plan-geometry';
 import type {
   FloorPlanData,
   DoorOpening,
@@ -475,6 +475,71 @@ function Furniture({ item, offsetX, offsetZ, clippingPlanes = [] }: { item: Furn
 }
 
 /* ------------------------------------------------------------------ */
+/* Roof (pitched gable, ridge along the building's longer axis)       */
+/* ------------------------------------------------------------------ */
+
+interface RoofProps {
+  width: number;
+  depth: number;
+  ceilingHeight: number;
+  color: string;
+  wireframe?: boolean;
+  clippingPlanes?: THREE.Plane[];
+}
+
+function Roof({ width, depth, ceilingHeight, color, wireframe, clippingPlanes = [] }: RoofProps) {
+  const ridgeAlongX = width >= depth;
+  const long = ridgeAlongX ? width : depth;
+  const short = ridgeAlongX ? depth : width;
+
+  const overhang = 0.5;
+  const rise = clamp(short * 0.22, 0.9, 2.4);
+  const halfLong = long / 2 + overhang;
+  const halfShort = short / 2 + overhang;
+  const slopeLength = Math.sqrt(halfShort * halfShort + rise * rise);
+  const slopeAngle = Math.atan2(rise, halfShort);
+  const baseY = ceilingHeight + 0.05;
+  const roofColor = useMemo(() => shadeColor(color, -32), [color]);
+  const gableColor = useMemo(() => shadeColor(color, -12), [color]);
+
+  const gableShape = useMemo(() => {
+    const shape = new THREE.Shape();
+    shape.moveTo(-halfShort, 0);
+    shape.lineTo(halfShort, 0);
+    shape.lineTo(0, rise);
+    shape.closePath();
+    return shape;
+  }, [halfShort, rise]);
+
+  return (
+    <group position={[0, baseY, 0]} rotation={[0, ridgeAlongX ? 0 : Math.PI / 2, 0]}>
+      {/* Two roof slopes meeting at a ridge over the building's center line */}
+      <mesh position={[0, rise / 2, halfShort / 2]} rotation={[slopeAngle, 0, 0]} castShadow receiveShadow>
+        <boxGeometry args={[halfLong * 2, 0.08, slopeLength]} />
+        <meshStandardMaterial color={roofColor} roughness={0.7} wireframe={wireframe} clippingPlanes={clippingPlanes} />
+      </mesh>
+      <mesh position={[0, rise / 2, -halfShort / 2]} rotation={[-slopeAngle, 0, 0]} castShadow receiveShadow>
+        <boxGeometry args={[halfLong * 2, 0.08, slopeLength]} />
+        <meshStandardMaterial color={roofColor} roughness={0.7} wireframe={wireframe} clippingPlanes={clippingPlanes} />
+      </mesh>
+      {/* Triangular gable end walls closing the two ends */}
+      {!wireframe && (
+        <>
+          <mesh position={[-halfLong, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
+            <shapeGeometry args={[gableShape]} />
+            <meshStandardMaterial color={gableColor} roughness={0.9} side={THREE.DoubleSide} clippingPlanes={clippingPlanes} />
+          </mesh>
+          <mesh position={[halfLong, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
+            <shapeGeometry args={[gableShape]} />
+            <meshStandardMaterial color={gableColor} roughness={0.9} side={THREE.DoubleSide} clippingPlanes={clippingPlanes} />
+          </mesh>
+        </>
+      )}
+    </group>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Building model                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -514,7 +579,7 @@ export function BuildingModel({
     windows: true,
     labels: true,
     ceiling: true,
-    roof: true,
+    roof: false,
   };
 
   // Ground patch dimensions (a bit larger than the building)
@@ -671,6 +736,18 @@ export function BuildingModel({
           <planeGeometry args={[width, depth]} />
           <meshStandardMaterial color="#f8f5ee" roughness={1} transparent opacity={0.25} side={THREE.DoubleSide} />
         </mesh>
+      )}
+
+      {/* Pitched roof over the building envelope */}
+      {ly.roof && (
+        <Roof
+          width={width}
+          depth={depth}
+          ceilingHeight={ceilingHeight}
+          color={wallColor}
+          wireframe={wireframe}
+          clippingPlanes={clippingPlanes}
+        />
       )}
     </group>
   );

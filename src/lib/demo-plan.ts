@@ -1,22 +1,25 @@
 import type { FloorPlanData, WallSegment } from './floor-plan-types';
 import { orthogonalizeWalls, snapToNearestWall } from './floor-plan-geometry';
 
+// Exterior walls (0.22m) read thicker than interior partitions (0.1m) —
+// matches how analyze-plan/route.ts now sizes walls from the VLM's
+// exterior/interior classification.
 const DEMO_WALLS: WallSegment[] = orthogonalizeWalls([
   // Perimeter
-  { x1: 0, z1: 0, x2: 11, z2: 0 },
-  { x1: 11, z1: 0, x2: 11, z2: 9 },
-  { x1: 11, z1: 9, x2: 0, z2: 9 },
-  { x1: 0, z1: 9, x2: 0, z2: 0 },
+  { x1: 0, z1: 0, x2: 11, z2: 0, thickness: 0.22 },
+  { x1: 11, z1: 0, x2: 11, z2: 9, thickness: 0.22 },
+  { x1: 11, z1: 9, x2: 0, z2: 9, thickness: 0.22 },
+  { x1: 0, z1: 9, x2: 0, z2: 0, thickness: 0.22 },
   // Living | Kitchen partition
-  { x1: 6, z1: 0, x2: 6, z2: 5 },
+  { x1: 6, z1: 0, x2: 6, z2: 5, thickness: 0.1 },
   // Bottom (living+kitchen) | top partition
-  { x1: 0, z1: 5, x2: 11, z2: 5 },
+  { x1: 0, z1: 5, x2: 11, z2: 5, thickness: 0.1 },
   // Bedroom1 | Hallway
-  { x1: 4, z1: 5, x2: 4, z2: 9 },
+  { x1: 4, z1: 5, x2: 4, z2: 9, thickness: 0.1 },
   // Hallway | Bedroom2
-  { x1: 8, z1: 5, x2: 8, z2: 9 },
+  { x1: 8, z1: 5, x2: 8, z2: 9, thickness: 0.1 },
   // Bathroom enclosure
-  { x1: 4, z1: 7, x2: 8, z2: 7 },
+  { x1: 4, z1: 7, x2: 8, z2: 7, thickness: 0.1 },
 ]);
 
 /**

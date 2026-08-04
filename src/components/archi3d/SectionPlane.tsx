@@ -97,7 +97,7 @@ export const DEFAULT_LAYERS = {
   windows: true,
   labels: true,
   ceiling: true,
-  roof: true,
+  roof: false,
 };
 
 export default SectionPlaneVisual;

@@ -39,6 +39,7 @@ import {
   Bookmark,
   Plus,
   EyeOff,
+  Triangle,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { archiXRStore } from '@/components/archi3d/ArchiScene';
@@ -91,7 +92,7 @@ const DEFAULT_SETTINGS: SceneSettings = {
     windows: true,
     labels: true,
     ceiling: true,
-    roof: true,
+    roof: false,
   },
 };
 
@@ -854,6 +855,7 @@ export function ViewerExperience({ data, originalImage, onBack, onSave }: Viewer
                     { key: 'furniture' as const, icon: Sofa, label: 'Mobiliario' },
                     { key: 'labels' as const, icon: Tags, label: 'Etiquetas' },
                     { key: 'ceiling' as const, icon: PanelTop, label: 'Techo' },
+                    { key: 'roof' as const, icon: Triangle, label: 'Tejado' },
                   ].map((layer) => (
                     <button
                       key={layer.key}

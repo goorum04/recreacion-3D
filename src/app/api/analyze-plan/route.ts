@@ -22,32 +22,14 @@ export const maxDuration = 120;
  * We later convert to meters using the detected/assumed real-world size.
  */
 const ANALYSIS_PROMPT = `You are an expert architect analyzing a 2D floor plan image.
-Analyze the floor plan carefully and extract its structural layout.
+Analyze the floor plan carefully and extract its structural layout, room by
+room, wall by wall. Take your time to trace every wall segment precisely —
+accuracy matters more than speed.
 
-Return ONLY a single JSON object (no markdown, no code fences, no commentary) with this exact schema:
-
-{
-  "buildingType": "apartment" | "house" | "office" | "studio" | "loft" | "commercial",
-  "summary": "one short sentence describing the dwelling",
-  "estimatedWidthMeters": number,
-  "estimatedDepthMeters": number,
-  "ceilingHeightMeters": number,
-  "rooms": [
-    { "name": "room name", "cx": number, "cz": number, "area": number, "color": "#rrggbb" }
-  ],
-  "walls": [
-    { "x1": number, "z1": number, "x2": number, "z2": number }
-  ],
-  "doors": [
-    { "x": number, "z": number, "width": number, "rotation": number }
-  ],
-  "windows": [
-    { "x": number, "z": number, "width": number, "sillHeight": number, "height": number, "rotation": number }
-  ],
-  "furniture": [
-    { "type": "sofa"|"table"|"bed"|"chair"|"counter"|"toilet"|"sink"|"fridge"|"tree", "x": number, "z": number, "rotation": number }
-  ]
-}
+Respond in the language the room labels are written in on the plan itself
+(translate generic room names to that language if the plan uses icons/symbols
+instead of text). If the plan has no legible language cues, respond in
+Spanish, since this app is used by Spanish-speaking architects.
 
 COORDINATE SYSTEM (critical):
 - Use a NORMALIZED grid from 0 to 100 on BOTH axes.
@@ -56,43 +38,153 @@ COORDINATE SYSTEM (critical):
 - X increases to the right, Z increases downward (we will map Z to depth in 3D).
 - All wall endpoints, room centers, doors, windows and furniture positions must use this 0..100 grid.
 
-WALLS:
+WALLS — this is the most important part, be meticulous:
 - Each wall is a straight line segment from (x1,z1) to (x2,z2).
-- Trace the OUTER perimeter and INNER partition walls.
-- Walls should connect end-to-end to form closed rooms where possible.
+- Trace the OUTER perimeter first as one continuous closed loop, then every
+  INNER partition wall that separates two rooms or a room from a hallway.
 - Walls MUST be axis-aligned: every segment is either perfectly horizontal
-  (z1 == z2) or perfectly vertical (x1 == x2). Do not output diagonal walls
-  unless the plan clearly shows one.
-- Wall endpoints that meet at a corner MUST use the exact same (x,z) pair
-  in every wall that touches that corner, so corners close cleanly with no
-  gaps or overlaps.
+  (z1 == z2) or perfectly vertical (x1 == x2). If the plan shows a wall at a
+  different angle, approximate it with the nearest horizontal/vertical
+  segment rather than a diagonal.
+- Wall endpoints that meet at a corner or a T-junction MUST use the exact
+  same (x,z) pair in every wall that touches that point — walls must form a
+  fully CLOSED, watertight loop with zero gaps between corners. Before
+  finishing, mentally trace the perimeter loop and every room boundary to
+  confirm there are no gaps.
+- Set "exterior": true for perimeter/outer walls (thicker, load-bearing) and
+  "exterior": false for interior partition walls (thinner).
+- Do not invent walls that aren't in the image, and do not skip a visible
+  wall just because it's a short segment (e.g. a closet nook).
 
 ROOMS:
-- List every enclosed room with a descriptive name (e.g. "Living Room", "Kitchen", "Bedroom", "Bathroom", "Hallway", "Dining").
-- cx,cz is the approximate center of the room on the 0..100 grid.
-- area is in square meters (estimate using the real-world dimensions).
-- color is a soft pastel floor color hint (#rrggbb).
+- List every enclosed room with a descriptive name translated/kept in the
+  plan's own language (e.g. "Living Room", "Kitchen", "Bedroom", "Bathroom",
+  "Hallway", "Dining", "Closet").
+- cx,cz is the approximate CENTER of that room's floor area on the 0..100 grid — it must land inside the room's own walls, not on a wall or in a neighboring room.
+- area is in square meters (estimate using the real-world dimensions you infer).
+- color is a soft pastel floor color hint (#rrggbb) that fits the room's use (e.g. cooler tones for bathrooms, warm neutrals for living areas).
 
 DOORS:
-- Place a door opening at the wall gap where a door appears.
-- rotation is in DEGREES: 0 means the door spans along the X axis, 90 means along the Z axis. Use the wall orientation.
-- width is the door width in meters (typical 0.8-0.9).
+- Place a door opening exactly where a door swing arc or door gap appears in
+  a wall — every door MUST sit ON a wall segment's line, not floating in the
+  middle of a room.
+- rotation is in DEGREES: 0 means the door spans along the X axis, 90 means
+  along the Z axis — always match the orientation of the wall it's cut into.
+- width is the door width in meters (typical 0.7-0.9 for interior doors, 0.9-1.0 for a main entrance).
+- Include every door you can see, including closet and bathroom doors.
 
 WINDOWS:
-- Place windows on exterior walls where window symbols appear.
-- sillHeight is the height of the window sill from the floor (typical 0.9).
-- height is the window height (typical 1.2).
-- rotation in degrees like doors.
+- Place windows ON exterior walls only, exactly where window symbols
+  (parallel lines / double lines on the outer wall) appear.
+- sillHeight is the height of the window sill from the floor (typical 0.9, lower for a large picture window).
+- height is the window height (typical 1.2-1.4).
+- rotation in degrees, same convention as doors — must match the exterior wall it's set into.
 
 FURNITURE:
-- Detect furniture symbols (bed, sofa, table, chairs, toilet, sink, fridge, kitchen counter, plants) and place them.
+- Detect furniture symbols (bed, sofa, table, chairs, toilet, sink, fridge, kitchen counter, plants) and place them roughly where drawn, inside the correct room.
 - rotation in degrees.
 
 REAL-WORLD SIZE:
-- estimatedWidthMeters and estimatedDepthMeters: your best estimate of the real building footprint.
-- ceilingHeightMeters: typical 2.5-3.0.
+- estimatedWidthMeters and estimatedDepthMeters: your best estimate of the real building footprint, using any dimension annotations/scale bar on the plan if present, otherwise typical room sizes as a reference (a bedroom is usually 10-16 m², a bathroom 3-6 m²).
+- ceilingHeightMeters: typical 2.5-3.0 for residential, up to 3.5 for commercial/loft spaces.
 
-Output ONLY the JSON. Do not include any text before or after.`;
+Double-check before responding: every door and window must lie exactly on a wall you listed, and every wall corner must be shared exactly by the walls that meet there.`;
+
+/**
+ * Gemini structured-output schema (OpenAPI subset). Forcing the response
+ * to conform to this shape — rather than just asking nicely in the prompt
+ * and hoping for well-formed JSON — cuts down on malformed/missing fields
+ * that used to require guesswork in normalizePlan()'s fallbacks.
+ */
+const RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    buildingType: {
+      type: 'STRING',
+      enum: ['apartment', 'house', 'office', 'studio', 'loft', 'commercial'],
+    },
+    summary: { type: 'STRING' },
+    estimatedWidthMeters: { type: 'NUMBER' },
+    estimatedDepthMeters: { type: 'NUMBER' },
+    ceilingHeightMeters: { type: 'NUMBER' },
+    rooms: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          name: { type: 'STRING' },
+          cx: { type: 'NUMBER' },
+          cz: { type: 'NUMBER' },
+          area: { type: 'NUMBER' },
+          color: { type: 'STRING' },
+        },
+        required: ['name', 'cx', 'cz', 'area'],
+      },
+    },
+    walls: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          x1: { type: 'NUMBER' },
+          z1: { type: 'NUMBER' },
+          x2: { type: 'NUMBER' },
+          z2: { type: 'NUMBER' },
+          exterior: { type: 'BOOLEAN' },
+        },
+        required: ['x1', 'z1', 'x2', 'z2'],
+      },
+    },
+    doors: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          x: { type: 'NUMBER' },
+          z: { type: 'NUMBER' },
+          width: { type: 'NUMBER' },
+          rotation: { type: 'NUMBER' },
+        },
+        required: ['x', 'z', 'width'],
+      },
+    },
+    windows: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          x: { type: 'NUMBER' },
+          z: { type: 'NUMBER' },
+          width: { type: 'NUMBER' },
+          sillHeight: { type: 'NUMBER' },
+          height: { type: 'NUMBER' },
+          rotation: { type: 'NUMBER' },
+        },
+        required: ['x', 'z', 'width'],
+      },
+    },
+    furniture: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          type: {
+            type: 'STRING',
+            enum: ['sofa', 'table', 'bed', 'chair', 'counter', 'toilet', 'sink', 'fridge', 'tree'],
+          },
+          x: { type: 'NUMBER' },
+          z: { type: 'NUMBER' },
+          rotation: { type: 'NUMBER' },
+        },
+        required: ['type', 'x', 'z'],
+      },
+    },
+  },
+  required: [
+    'buildingType', 'summary', 'estimatedWidthMeters', 'estimatedDepthMeters',
+    'ceilingHeightMeters', 'rooms', 'walls', 'doors', 'windows', 'furniture',
+  ],
+};
 
 // 'gemini-flash-latest' is a Google-maintained alias that gets hot-swapped
 // to the newest stable Flash model on every release, instead of pinning to
@@ -129,7 +221,11 @@ async function callGeminiVision(imageDataUrl: string, apiKey: string): Promise<s
         ],
       },
     ],
-    generationConfig: { responseMimeType: 'application/json' },
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: RESPONSE_SCHEMA,
+      temperature: 0.15,
+    },
   });
 
   const RETRY_DELAYS_MS = [2000, 5000, 10000];
@@ -204,7 +300,8 @@ function normalizePlan(raw: any): FloorPlanData {
           x2: toMeters(clamp(Number(w?.x2) || 0, 0, 100), planWidth),
           z2: toMeters(clamp(Number(w?.z2) || 0, 0, 100), planDepth),
           height: ceilingHeight,
-          thickness: 0.15,
+          // Exterior/load-bearing walls read thicker than interior partitions.
+          thickness: w?.exterior === false ? 0.1 : 0.22,
         }))
         .filter((w: WallSegment) => !(w.x1 === w.x2 && w.z1 === w.z2))
     : [];
