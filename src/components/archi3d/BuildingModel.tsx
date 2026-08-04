@@ -115,11 +115,15 @@ interface DoorProps {
   clippingPlanes?: THREE.Plane[];
 }
 
-// Leaf rotation around its hinge (local Y). At CLOSED_ROT the leaf's long
-// axis lines up with the wall's own length axis, so it fills the opening
-// flush; sweeping toward OPEN_ROT swings it into the room.
-const DOOR_CLOSED_ROT = Math.PI / 2;
-const DOOR_OPEN_ROT = Math.PI / 2 - (80 * Math.PI) / 180;
+// Leaf rotation around its hinge (local Y). At CLOSED_ROT the leaf sweeps
+// from the hinge to exactly span the frame gap (verified against the
+// door group's actual world-space bounding box, not just by inspection —
+// the opposite sign looks plausible from some camera angles but actually
+// swings the leaf entirely outside the opening). Sweeping toward OPEN_ROT
+// swings it into the room.
+const DOOR_CLOSED_ROT = -Math.PI / 2;
+const DOOR_SWING = (80 * Math.PI) / 180;
+const DOOR_OPEN_ROT = DOOR_CLOSED_ROT + DOOR_SWING;
 
 function Door({ door, offsetX, offsetZ, ceilingHeight, open, onToggle, clippingPlanes = [] }: DoorProps) {
   const { x, z, width, rotation } = door;
@@ -197,8 +201,9 @@ interface WindowProps {
 
 // Same hinge convention as the door leaf, but casement windows swing less
 // wide open.
-const WINDOW_CLOSED_ROT = Math.PI / 2;
-const WINDOW_OPEN_ROT = Math.PI / 2 - (65 * Math.PI) / 180;
+const WINDOW_CLOSED_ROT = -Math.PI / 2;
+const WINDOW_SWING = (65 * Math.PI) / 180;
+const WINDOW_OPEN_ROT = WINDOW_CLOSED_ROT + WINDOW_SWING;
 
 function WindowMesh({ win, offsetX, offsetZ, open, onToggle, clippingPlanes = [] }: WindowProps) {
   const { x, z, width, sillHeight, height, rotation } = win;
