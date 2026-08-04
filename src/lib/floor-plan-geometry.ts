@@ -85,38 +85,31 @@ export interface OpeningSpan {
   width: number;
 }
 
-/**
- * Splits a wall into the sub-segments that remain after cutting a
- * width-wide gap at every opening (door) that lies on it. <Wall> draws a
- * single solid box per segment with no notch for doors/windows, so without
- * this the door mesh just floats decoratively in front of a closed wall
- * instead of standing in a real opening.
- */
-export function splitWallForOpenings(wall: WallSegment, openings: OpeningSpan[]): WallSegment[] {
-  const dx = wall.x2 - wall.x1;
-  const dz = wall.z2 - wall.z1;
-  const length = Math.hypot(dx, dz);
-  if (length < 0.01) return [wall];
-  const ux = dx / length;
-  const uz = dz / length;
-  const thickness = wall.thickness ?? 0.15;
+export interface WindowSpan extends OpeningSpan {
+  sillHeight: number;
+  height: number;
+}
 
-  const cuts: { from: number; to: number }[] = [];
-  for (const o of openings) {
-    const t = (o.x - wall.x1) * ux + (o.z - wall.z1) * uz;
-    if (t <= 0 || t >= length) continue;
-    const px = wall.x1 + t * ux;
-    const pz = wall.z1 + t * uz;
-    const perpDist = Math.hypot(px - o.x, pz - o.z);
-    if (perpDist > thickness * 2 + 0.15) continue;
-    const half = o.width / 2;
-    cuts.push({ from: clamp(t - half, 0, length), to: clamp(t + half, 0, length) });
-  }
-  if (cuts.length === 0) return [wall];
+/** A rectangular piece of wall: a horizontal run at a given vertical band. */
+export interface WallSlab {
+  x1: number;
+  z1: number;
+  x2: number;
+  z2: number;
+  thickness: number;
+  yFrom: number;
+  yTo: number;
+}
 
-  cuts.sort((a, b) => a.from - b.from);
-  const merged: { from: number; to: number }[] = [];
-  for (const c of cuts) {
+interface Interval {
+  from: number;
+  to: number;
+}
+
+function mergeIntervals(intervals: Interval[]): Interval[] {
+  const sorted = [...intervals].sort((a, b) => a.from - b.from);
+  const merged: Interval[] = [];
+  for (const c of sorted) {
     const last = merged[merged.length - 1];
     if (last && c.from <= last.to + 0.02) {
       last.to = Math.max(last.to, c.to);
@@ -124,21 +117,113 @@ export function splitWallForOpenings(wall: WallSegment, openings: OpeningSpan[])
       merged.push({ ...c });
     }
   }
+  return merged;
+}
 
-  const subWall = (from: number, to: number): WallSegment => ({
-    ...wall,
+/** The parts of [domainFrom, domainTo] not covered by any of `voids`. */
+function complementIntervals(voids: Interval[], domainFrom: number, domainTo: number): Interval[] {
+  const remain: Interval[] = [];
+  let cursor = domainFrom;
+  for (const v of voids) {
+    if (v.from - cursor > 0.05) remain.push({ from: cursor, to: v.from });
+    cursor = Math.max(cursor, v.to);
+  }
+  if (domainTo - cursor > 0.05) remain.push({ from: cursor, to: domainTo });
+  return remain;
+}
+
+/** Projects an opening onto a wall's length axis; null if it isn't on this wall. */
+function projectSpan(
+  wall: WallSegment,
+  ux: number,
+  uz: number,
+  length: number,
+  o: OpeningSpan,
+): Interval | null {
+  const t = (o.x - wall.x1) * ux + (o.z - wall.z1) * uz;
+  if (t <= 0 || t >= length) return null;
+  const px = wall.x1 + t * ux;
+  const pz = wall.z1 + t * uz;
+  const perpDist = Math.hypot(px - o.x, pz - o.z);
+  const thickness = wall.thickness ?? 0.15;
+  if (perpDist > thickness * 2 + 0.15) return null;
+  const half = o.width / 2;
+  return { from: clamp(t - half, 0, length), to: clamp(t + half, 0, length) };
+}
+
+/**
+ * Splits a wall into the slabs that remain after cutting real openings for
+ * every door and window that lies on it, instead of the single solid box
+ * <Wall> used to draw regardless of doors/windows. Doors remove the wall
+ * entirely (floor to ceiling) at their span; windows only remove the band
+ * between their sill and header, leaving wall below the sill and above the
+ * window — like a real window opening instead of a floating glass overlay.
+ */
+export function buildWallSlabs(
+  wall: WallSegment,
+  doors: OpeningSpan[],
+  windows: WindowSpan[],
+): WallSlab[] {
+  const dx = wall.x2 - wall.x1;
+  const dz = wall.z2 - wall.z1;
+  const length = Math.hypot(dx, dz);
+  const thickness = wall.thickness ?? 0.15;
+  const wallHeight = wall.height ?? 2.7;
+  if (length < 0.01) {
+    return [{ x1: wall.x1, z1: wall.z1, x2: wall.x2, z2: wall.z2, thickness, yFrom: 0, yTo: wallHeight }];
+  }
+  const ux = dx / length;
+  const uz = dz / length;
+
+  const toXZ = (from: number, to: number) => ({
     x1: wall.x1 + ux * from,
     z1: wall.z1 + uz * from,
     x2: wall.x1 + ux * to,
     z2: wall.z1 + uz * to,
   });
 
-  const segments: WallSegment[] = [];
-  let cursor = 0;
-  for (const c of merged) {
-    if (c.from - cursor > 0.05) segments.push(subWall(cursor, c.from));
-    cursor = c.to;
+  const doorVoids = mergeIntervals(
+    doors
+      .map((d) => projectSpan(wall, ux, uz, length, d))
+      .filter((v): v is Interval => v !== null),
+  );
+  const wallRanges = doorVoids.length ? complementIntervals(doorVoids, 0, length) : [{ from: 0, to: length }];
+
+  const slabs: WallSlab[] = [];
+  for (const range of wallRanges) {
+    const winsHere = windows
+      .map((w) => {
+        const span = projectSpan(wall, ux, uz, length, w);
+        if (!span) return null;
+        const from = Math.max(span.from, range.from);
+        const to = Math.min(span.to, range.to);
+        if (to - from < 0.05) return null;
+        return { from, to, sillHeight: w.sillHeight, height: w.height };
+      })
+      .filter((w): w is { from: number; to: number; sillHeight: number; height: number } => w !== null)
+      .sort((a, b) => a.from - b.from);
+
+    if (winsHere.length === 0) {
+      const { x1, z1, x2, z2 } = toXZ(range.from, range.to);
+      slabs.push({ x1, z1, x2, z2, thickness, yFrom: 0, yTo: wallHeight });
+      continue;
+    }
+
+    const solidRanges = complementIntervals(
+      winsHere.map((w) => ({ from: w.from, to: w.to })),
+      range.from,
+      range.to,
+    );
+    for (const r of solidRanges) {
+      const { x1, z1, x2, z2 } = toXZ(r.from, r.to);
+      slabs.push({ x1, z1, x2, z2, thickness, yFrom: 0, yTo: wallHeight });
+    }
+    for (const w of winsHere) {
+      const { x1, z1, x2, z2 } = toXZ(w.from, w.to);
+      if (w.sillHeight > 0.05) slabs.push({ x1, z1, x2, z2, thickness, yFrom: 0, yTo: w.sillHeight });
+      const top = w.sillHeight + w.height;
+      if (wallHeight - top > 0.05) slabs.push({ x1, z1, x2, z2, thickness, yFrom: top, yTo: wallHeight });
+    }
   }
-  if (length - cursor > 0.05) segments.push(subWall(cursor, length));
-  return segments;
+  return slabs;
 }

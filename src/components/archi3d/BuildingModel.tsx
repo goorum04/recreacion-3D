@@ -1,12 +1,12 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Html } from '@react-three/drei';
-import { splitWallForOpenings } from '@/lib/floor-plan-geometry';
+import { useFrame } from '@react-three/fiber';
+import { Html, useCursor } from '@react-three/drei';
+import { buildWallSlabs, type WallSlab } from '@/lib/floor-plan-geometry';
 import type {
   FloorPlanData,
-  WallSegment,
   DoorOpening,
   WindowOpening,
   FurnitureItem,
@@ -19,7 +19,8 @@ import type {
 /* ------------------------------------------------------------------ */
 
 interface WallProps {
-  wall: WallSegment;
+  slab: WallSlab;
+  ceilingHeight: number;
   offsetX: number;
   offsetZ: number;
   color: string;
@@ -27,41 +28,43 @@ interface WallProps {
   clippingPlanes?: THREE.Plane[];
 }
 
-function Wall({ wall, offsetX, offsetZ, color, wireframe, clippingPlanes = [] }: WallProps) {
-  const { x1, z1, x2, z2, height = 2.7, thickness = 0.15 } = wall;
+function Wall({ slab, ceilingHeight, offsetX, offsetZ, color, wireframe, clippingPlanes = [] }: WallProps) {
+  const { x1, z1, x2, z2, thickness, yFrom, yTo } = slab;
   const dx = x2 - x1;
   const dz = z2 - z1;
   const length = Math.sqrt(dx * dx + dz * dz);
   const angle = Math.atan2(dx, dz);
   const cx = (x1 + x2) / 2 + offsetX;
   const cz = (z1 + z2) / 2 + offsetZ;
+  const h = yTo - yFrom;
+  const midY = (yFrom + yTo) / 2;
+  const atFloor = yFrom < 0.02;
+  const atCeiling = yTo > ceilingHeight - 0.02;
 
   // Slightly darker shade for baseboard/trim derived from the wall color.
   // (must be called before any early return to respect the rules of hooks)
   const trimColor = useMemo(() => shadeColor(color, -18), [color]);
 
-  if (length < 0.01) return null;
+  if (length < 0.01 || h < 0.02) return null;
 
   return (
     <group position={[cx, 0, cz]} rotation={[0, angle, 0]}>
       {/* Wall body */}
-      <mesh position={[0, height / 2, 0]} castShadow receiveShadow>
-        <boxGeometry args={[thickness, height, length]} />
+      <mesh position={[0, midY, 0]} castShadow receiveShadow>
+        <boxGeometry args={[thickness, h, length]} />
         <meshStandardMaterial color={color} roughness={0.9} wireframe={wireframe} clippingPlanes={clippingPlanes} clipShadows />
       </mesh>
-      {!wireframe && (
-        <>
-          {/* Baseboard */}
-          <mesh position={[0, 0.06, 0]}>
-            <boxGeometry args={[thickness * 1.05, 0.12, length]} />
-            <meshStandardMaterial color={trimColor} roughness={0.8} clippingPlanes={clippingPlanes} />
-          </mesh>
-          {/* Top trim */}
-          <mesh position={[0, height - 0.05, 0]}>
-            <boxGeometry args={[thickness * 1.08, 0.08, length]} />
-            <meshStandardMaterial color={trimColor} roughness={0.85} clippingPlanes={clippingPlanes} />
-          </mesh>
-        </>
+      {!wireframe && atFloor && (
+        <mesh position={[0, yFrom + 0.06, 0]}>
+          <boxGeometry args={[thickness * 1.05, 0.12, length]} />
+          <meshStandardMaterial color={trimColor} roughness={0.8} clippingPlanes={clippingPlanes} />
+        </mesh>
+      )}
+      {!wireframe && atCeiling && (
+        <mesh position={[0, yTo - 0.05, 0]}>
+          <boxGeometry args={[thickness * 1.08, 0.08, length]} />
+          <meshStandardMaterial color={trimColor} roughness={0.85} clippingPlanes={clippingPlanes} />
+        </mesh>
       )}
     </group>
   );
@@ -107,14 +110,31 @@ interface DoorProps {
   offsetX: number;
   offsetZ: number;
   ceilingHeight: number;
+  open: boolean;
+  onToggle: () => void;
   clippingPlanes?: THREE.Plane[];
 }
 
-function Door({ door, offsetX, offsetZ, ceilingHeight, clippingPlanes = [] }: DoorProps) {
+// Leaf rotation around its hinge (local Y). At CLOSED_ROT the leaf's long
+// axis lines up with the wall's own length axis, so it fills the opening
+// flush; sweeping toward OPEN_ROT swings it into the room.
+const DOOR_CLOSED_ROT = Math.PI / 2;
+const DOOR_OPEN_ROT = Math.PI / 2 - (80 * Math.PI) / 180;
+
+function Door({ door, offsetX, offsetZ, ceilingHeight, open, onToggle, clippingPlanes = [] }: DoorProps) {
   const { x, z, width, rotation } = door;
   const cx = x + offsetX;
   const cz = z + offsetZ;
   const h = Math.min(2.1, ceilingHeight - 0.2);
+  const leafRef = useRef<THREE.Group>(null);
+  const [hovered, setHovered] = useState(false);
+  useCursor(hovered);
+
+  useFrame((_, delta) => {
+    const g = leafRef.current;
+    if (!g) return;
+    g.rotation.y = THREE.MathUtils.damp(g.rotation.y, open ? DOOR_OPEN_ROT : DOOR_CLOSED_ROT, 8, delta);
+  });
 
   return (
     <group position={[cx, 0, cz]} rotation={[0, rotation, 0]}>
@@ -133,17 +153,30 @@ function Door({ door, offsetX, offsetZ, ceilingHeight, clippingPlanes = [] }: Do
         <boxGeometry args={[0.12, 0.1, width + 0.08]} />
         <meshStandardMaterial color="#8b6f47" roughness={0.6} clippingPlanes={clippingPlanes} />
       </mesh>
-      {/* Door panel (half open) */}
-      <group position={[0, 0, -width / 2]}>
-        <mesh position={[width / 2, h / 2 - 0.05, 0]} castShadow>
-          <boxGeometry args={[width, h - 0.1, 0.04]} />
-          <meshStandardMaterial color="#a98263" roughness={0.55} metalness={0.05} clippingPlanes={clippingPlanes} />
-        </mesh>
-        {/* Handle */}
-        <mesh position={[width - 0.1, h / 2, 0.06]}>
-          <sphereGeometry args={[0.03, 12, 12]} />
-          <meshStandardMaterial color="#d4af37" metalness={0.8} roughness={0.3} clippingPlanes={clippingPlanes} />
-        </mesh>
+      {/* Door leaf: hinged at the left post, click to open/close */}
+      <group
+        position={[0, 0, -width / 2]}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+        onPointerOver={(e) => {
+          e.stopPropagation();
+          setHovered(true);
+        }}
+        onPointerOut={() => setHovered(false)}
+      >
+        <group ref={leafRef} rotation={[0, DOOR_CLOSED_ROT, 0]}>
+          <mesh position={[width / 2, h / 2 - 0.05, 0]} castShadow>
+            <boxGeometry args={[width, h - 0.1, 0.04]} />
+            <meshStandardMaterial color="#a98263" roughness={0.55} metalness={0.05} clippingPlanes={clippingPlanes} />
+          </mesh>
+          {/* Handle */}
+          <mesh position={[width - 0.1, h / 2, 0.06]}>
+            <sphereGeometry args={[0.03, 12, 12]} />
+            <meshStandardMaterial color="#d4af37" metalness={0.8} roughness={0.3} clippingPlanes={clippingPlanes} />
+          </mesh>
+        </group>
       </group>
     </group>
   );
@@ -157,54 +190,80 @@ interface WindowProps {
   win: WindowOpening;
   offsetX: number;
   offsetZ: number;
+  open: boolean;
+  onToggle: () => void;
   clippingPlanes?: THREE.Plane[];
 }
 
-function WindowMesh({ win, offsetX, offsetZ, clippingPlanes = [] }: WindowProps) {
+// Same hinge convention as the door leaf, but casement windows swing less
+// wide open.
+const WINDOW_CLOSED_ROT = Math.PI / 2;
+const WINDOW_OPEN_ROT = Math.PI / 2 - (65 * Math.PI) / 180;
+
+function WindowMesh({ win, offsetX, offsetZ, open, onToggle, clippingPlanes = [] }: WindowProps) {
   const { x, z, width, sillHeight, height, rotation } = win;
   const cx = x + offsetX;
   const cz = z + offsetZ;
+  const midY = sillHeight + height / 2;
+  const sashRef = useRef<THREE.Group>(null);
+  const [hovered, setHovered] = useState(false);
+  useCursor(hovered);
+
+  useFrame((_, delta) => {
+    const g = sashRef.current;
+    if (!g) return;
+    g.rotation.y = THREE.MathUtils.damp(g.rotation.y, open ? WINDOW_OPEN_ROT : WINDOW_CLOSED_ROT, 8, delta);
+  });
 
   return (
     <group position={[cx, 0, cz]} rotation={[0, rotation, 0]}>
-      {/* Glass */}
-      <mesh position={[0, sillHeight + height / 2, 0]}>
-        <boxGeometry args={[0.05, height, width]} />
-        <meshPhysicalMaterial
-          color="#bfe3f2"
-          transparent
-          opacity={0.35}
-          roughness={0.05}
-          metalness={0.1}
-          transmission={0.6}
-          ior={1.45}
-          clippingPlanes={clippingPlanes}
-        />
-      </mesh>
-      {/* Frame: top */}
+      {/* Fixed outer frame, set into the wall opening */}
       <mesh position={[0, sillHeight + height + 0.03, 0]}>
         <boxGeometry args={[0.12, 0.06, width + 0.06]} />
         <meshStandardMaterial color="#5a4a3a" roughness={0.6} clippingPlanes={clippingPlanes} />
       </mesh>
-      {/* Frame: bottom (sill) */}
       <mesh position={[0, sillHeight - 0.03, 0]}>
         <boxGeometry args={[0.16, 0.06, width + 0.08]} />
         <meshStandardMaterial color="#6b5a48" roughness={0.6} clippingPlanes={clippingPlanes} />
       </mesh>
-      {/* Frame: sides */}
-      <mesh position={[0, sillHeight + height / 2, -width / 2 - 0.03]}>
+      <mesh position={[0, midY, -width / 2 - 0.03]}>
         <boxGeometry args={[0.1, height + 0.1, 0.06]} />
         <meshStandardMaterial color="#5a4a3a" roughness={0.6} clippingPlanes={clippingPlanes} />
       </mesh>
-      <mesh position={[0, sillHeight + height / 2, width / 2 + 0.03]}>
+      <mesh position={[0, midY, width / 2 + 0.03]}>
         <boxGeometry args={[0.1, height + 0.1, 0.06]} />
         <meshStandardMaterial color="#5a4a3a" roughness={0.6} clippingPlanes={clippingPlanes} />
       </mesh>
-      {/* Center mullion */}
-      <mesh position={[0, sillHeight + height / 2, 0]}>
-        <boxGeometry args={[0.06, height, 0.04]} />
-        <meshStandardMaterial color="#5a4a3a" roughness={0.6} clippingPlanes={clippingPlanes} />
-      </mesh>
+
+      {/* Moving sash (glass), hinged at the left jamb — click to open/close */}
+      <group
+        position={[0, 0, -width / 2]}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+        onPointerOver={(e) => {
+          e.stopPropagation();
+          setHovered(true);
+        }}
+        onPointerOut={() => setHovered(false)}
+      >
+        <group ref={sashRef} rotation={[0, WINDOW_CLOSED_ROT, 0]}>
+          <mesh position={[width / 2, midY, 0]}>
+            <boxGeometry args={[width, height, 0.05]} />
+            <meshPhysicalMaterial
+              color="#bfe3f2"
+              transparent
+              opacity={0.35}
+              roughness={0.05}
+              metalness={0.1}
+              transmission={0.6}
+              ior={1.45}
+              clippingPlanes={clippingPlanes}
+            />
+          </mesh>
+        </group>
+      </group>
     </group>
   );
 }
@@ -457,20 +516,27 @@ export function BuildingModel({
   const groundW = width + 8;
   const groundD = depth + 8;
 
-  // Doors need a real gap cut into the wall they sit on — otherwise the
-  // door panel just floats decoratively in front of a solid, closed wall.
+  // Doors/windows need a real gap cut into the wall they sit on — otherwise
+  // they just float decoratively in front of a solid, closed wall. Doors
+  // remove the wall entirely at their span; windows only remove the band
+  // between sill and header.
   const doorSpans = useMemo(
     () => data.doors.map((d) => ({ x: d.x, z: d.z, width: d.width })),
     [data.doors],
+  );
+  const windowSpans = useMemo(
+    () => data.windows.map((w) => ({ x: w.x, z: w.z, width: w.width, sillHeight: w.sillHeight, height: w.height })),
+    [data.windows],
   );
 
   const wallMeshes = useMemo(
     () =>
       data.walls.flatMap((w, i) =>
-        splitWallForOpenings(w, doorSpans).map((seg, j) => (
+        buildWallSlabs(w, doorSpans, windowSpans).map((slab, j) => (
           <Wall
             key={`w-${i}-${j}`}
-            wall={seg}
+            slab={slab}
+            ceilingHeight={ceilingHeight}
             offsetX={offsetX}
             offsetZ={offsetZ}
             color={wallColor}
@@ -479,8 +545,26 @@ export function BuildingModel({
           />
         )),
       ),
-    [data.walls, doorSpans, offsetX, offsetZ, wallColor, wireframe, clippingPlanes],
+    [data.walls, doorSpans, windowSpans, ceilingHeight, offsetX, offsetZ, wallColor, wireframe, clippingPlanes],
   );
+
+  // Open/closed state per door/window, keyed by index; resets to "all
+  // closed" only when the plan's opening count actually changes (a new
+  // plan/project loaded), adjusted during render per
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  // rather than in an effect, so it doesn't cause an extra render pass.
+  const [doorOpen, setDoorOpen] = useState<boolean[]>(() => data.doors.map(() => false));
+  const [prevDoorCount, setPrevDoorCount] = useState(data.doors.length);
+  if (data.doors.length !== prevDoorCount) {
+    setPrevDoorCount(data.doors.length);
+    setDoorOpen(data.doors.map(() => false));
+  }
+  const [windowOpen, setWindowOpen] = useState<boolean[]>(() => data.windows.map(() => false));
+  const [prevWindowCount, setPrevWindowCount] = useState(data.windows.length);
+  if (data.windows.length !== prevWindowCount) {
+    setPrevWindowCount(data.windows.length);
+    setWindowOpen(data.windows.map(() => false));
+  }
 
   // A small square post at every wall corner hides the diagonal seam where
   // two rotated wall boxes meet (or end).
@@ -535,7 +619,7 @@ export function BuildingModel({
       {ly.walls && wallMeshes}
       {ly.walls && !wireframe && cornerPosts}
 
-      {/* Doors */}
+      {/* Doors — click a door to open/close it */}
       {ly.doors &&
         data.doors.map((d, i) => (
           <Door
@@ -544,11 +628,13 @@ export function BuildingModel({
             offsetX={offsetX}
             offsetZ={offsetZ}
             ceilingHeight={ceilingHeight}
+            open={doorOpen[i] ?? false}
+            onToggle={() => setDoorOpen((prev) => prev.map((v, j) => (j === i ? !v : v)))}
             clippingPlanes={clippingPlanes}
           />
         ))}
 
-      {/* Windows */}
+      {/* Windows — click a window to open/close it */}
       {ly.windows &&
         data.windows.map((w, i) => (
           <WindowMesh
@@ -556,6 +642,8 @@ export function BuildingModel({
             win={w}
             offsetX={offsetX}
             offsetZ={offsetZ}
+            open={windowOpen[i] ?? false}
+            onToggle={() => setWindowOpen((prev) => prev.map((v, j) => (j === i ? !v : v)))}
             clippingPlanes={clippingPlanes}
           />
         ))}
