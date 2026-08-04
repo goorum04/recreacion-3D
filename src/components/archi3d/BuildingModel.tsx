@@ -3,6 +3,7 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { Html } from '@react-three/drei';
+import { splitWallForOpenings } from '@/lib/floor-plan-geometry';
 import type {
   FloorPlanData,
   WallSegment,
@@ -456,19 +457,29 @@ export function BuildingModel({
   const groundW = width + 8;
   const groundD = depth + 8;
 
+  // Doors need a real gap cut into the wall they sit on — otherwise the
+  // door panel just floats decoratively in front of a solid, closed wall.
+  const doorSpans = useMemo(
+    () => data.doors.map((d) => ({ x: d.x, z: d.z, width: d.width })),
+    [data.doors],
+  );
+
   const wallMeshes = useMemo(
-    () => data.walls.map((w, i) => (
-      <Wall
-        key={`w-${i}`}
-        wall={w}
-        offsetX={offsetX}
-        offsetZ={offsetZ}
-        color={wallColor}
-        wireframe={wireframe}
-        clippingPlanes={clippingPlanes}
-      />
-    )),
-    [data.walls, offsetX, offsetZ, wallColor, wireframe, clippingPlanes],
+    () =>
+      data.walls.flatMap((w, i) =>
+        splitWallForOpenings(w, doorSpans).map((seg, j) => (
+          <Wall
+            key={`w-${i}-${j}`}
+            wall={seg}
+            offsetX={offsetX}
+            offsetZ={offsetZ}
+            color={wallColor}
+            wireframe={wireframe}
+            clippingPlanes={clippingPlanes}
+          />
+        )),
+      ),
+    [data.walls, doorSpans, offsetX, offsetZ, wallColor, wireframe, clippingPlanes],
   );
 
   // A small square post at every wall corner hides the diagonal seam where

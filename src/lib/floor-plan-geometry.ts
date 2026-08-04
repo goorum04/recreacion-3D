@@ -78,3 +78,67 @@ export function snapToNearestWall(
   }
   return best ? { x: best.x, z: best.z, rotation: best.rotation } : { x, z, rotation: 0 };
 }
+
+export interface OpeningSpan {
+  x: number;
+  z: number;
+  width: number;
+}
+
+/**
+ * Splits a wall into the sub-segments that remain after cutting a
+ * width-wide gap at every opening (door) that lies on it. <Wall> draws a
+ * single solid box per segment with no notch for doors/windows, so without
+ * this the door mesh just floats decoratively in front of a closed wall
+ * instead of standing in a real opening.
+ */
+export function splitWallForOpenings(wall: WallSegment, openings: OpeningSpan[]): WallSegment[] {
+  const dx = wall.x2 - wall.x1;
+  const dz = wall.z2 - wall.z1;
+  const length = Math.hypot(dx, dz);
+  if (length < 0.01) return [wall];
+  const ux = dx / length;
+  const uz = dz / length;
+  const thickness = wall.thickness ?? 0.15;
+
+  const cuts: { from: number; to: number }[] = [];
+  for (const o of openings) {
+    const t = (o.x - wall.x1) * ux + (o.z - wall.z1) * uz;
+    if (t <= 0 || t >= length) continue;
+    const px = wall.x1 + t * ux;
+    const pz = wall.z1 + t * uz;
+    const perpDist = Math.hypot(px - o.x, pz - o.z);
+    if (perpDist > thickness * 2 + 0.15) continue;
+    const half = o.width / 2;
+    cuts.push({ from: clamp(t - half, 0, length), to: clamp(t + half, 0, length) });
+  }
+  if (cuts.length === 0) return [wall];
+
+  cuts.sort((a, b) => a.from - b.from);
+  const merged: { from: number; to: number }[] = [];
+  for (const c of cuts) {
+    const last = merged[merged.length - 1];
+    if (last && c.from <= last.to + 0.02) {
+      last.to = Math.max(last.to, c.to);
+    } else {
+      merged.push({ ...c });
+    }
+  }
+
+  const subWall = (from: number, to: number): WallSegment => ({
+    ...wall,
+    x1: wall.x1 + ux * from,
+    z1: wall.z1 + uz * from,
+    x2: wall.x1 + ux * to,
+    z2: wall.z1 + uz * to,
+  });
+
+  const segments: WallSegment[] = [];
+  let cursor = 0;
+  for (const c of merged) {
+    if (c.from - cursor > 0.05) segments.push(subWall(cursor, c.from));
+    cursor = c.to;
+  }
+  if (length - cursor > 0.05) segments.push(subWall(cursor, length));
+  return segments;
+}
