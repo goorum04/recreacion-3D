@@ -108,6 +108,39 @@ REAL-WORLD SIZE:
 Double-check before responding: every door and window must lie exactly on a wall you listed, and every wall corner must be shared exactly by the walls that meet there.`;
 
 /**
+ * A second, focused pass that only looks for doors and windows — run
+ * independently of ANALYSIS_PROMPT (not shown this model's answer) so it's
+ * a genuinely separate attempt rather than the model just agreeing with
+ * itself. Doors/windows are the detail most often dropped in a single
+ * pass (especially the main entrance), and re-detecting them costs one
+ * extra lightweight call. Results from both passes get merged, so if
+ * either one finds an opening the other missed, it still ends up in the
+ * model.
+ */
+const DOOR_WINDOW_RECHECK_PROMPT = `You are an expert architect. Look ONLY at doors and windows in this 2D floor plan image — ignore everything else.
+
+Use a NORMALIZED grid from 0 to 100 on both axes: (0,0) is the top-left
+corner of the image, (100,100) is the bottom-right. X increases right, Z
+increases downward.
+
+Find every door (interior AND exterior) and every window:
+- A door is a gap in a wall, usually with a quarter-circle swing arc drawn
+  next to it. rotation in degrees: 0 = spans along X, 90 = spans along Z —
+  match the wall it's cut into. width in meters (0.7-0.9 interior, 0.9-1.0
+  main entrance).
+- CRITICAL: scan the ENTIRE outer perimeter for the main entrance door —
+  exactly one gap/swing cut into an exterior wall, the dwelling's only way
+  in from outside. It is very easy to miss on a first read; look at every
+  perimeter wall segment individually before concluding there is none.
+- A window is a set of parallel/double lines on an EXTERIOR wall only.
+  sillHeight typically 0.9, height typically 1.2-1.4, rotation same
+  convention as doors.
+
+Return every door/window you can find, even ones a previous pass might
+already have listed — duplicates will be merged automatically, so
+completeness matters more than avoiding repeats.`;
+
+/**
  * Gemini structured-output schema (OpenAPI subset). Forcing the response
  * to conform to this shape — rather than just asking nicely in the prompt
  * and hoping for well-formed JSON — cuts down on malformed/missing fields
@@ -203,6 +236,16 @@ const RESPONSE_SCHEMA = {
   ],
 };
 
+/** Schema for the focused doors/windows recheck pass — see DOOR_WINDOW_RECHECK_PROMPT. */
+const DOOR_WINDOW_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    doors: RESPONSE_SCHEMA.properties.doors,
+    windows: RESPONSE_SCHEMA.properties.windows,
+  },
+  required: ['doors', 'windows'],
+};
+
 // 'gemini-flash-latest' is a Google-maintained alias that gets hot-swapped
 // to the newest stable Flash model on every release, instead of pinning to
 // a specific dated version that Google eventually deprecates/blocks for
@@ -220,7 +263,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * a few seconds at a time — Google's own error message calls these "usually
  * temporary", so retry a few times with backoff before giving up.
  */
-async function callGeminiVision(imageDataUrl: string, apiKey: string): Promise<string> {
+async function callGeminiVision(
+  imageDataUrl: string,
+  apiKey: string,
+  prompt: string,
+  schema: object,
+): Promise<string> {
   const match = imageDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
   if (!match) {
     throw new Error('Formato de imagen no soportado (se requiere data:image/...;base64,...).');
@@ -233,14 +281,14 @@ async function callGeminiVision(imageDataUrl: string, apiKey: string): Promise<s
       {
         role: 'user',
         parts: [
-          { text: ANALYSIS_PROMPT },
+          { text: prompt },
           { inline_data: { mime_type: mimeType, data: base64Data } },
         ],
       },
     ],
     generationConfig: {
       responseMimeType: 'application/json',
-      responseSchema: RESPONSE_SCHEMA,
+      responseSchema: schema,
       temperature: 0.15,
     },
   });
@@ -426,6 +474,21 @@ function normalizePlan(raw: any): FloorPlanData {
   };
 }
 
+/** Grid-unit (0-100 scale) distance below which two openings are treated as the same physical door/window. */
+const OPENING_DEDUP_DIST = 6;
+
+/** Merges a second list of doors/windows into the first, dropping anything too close to an existing entry. */
+function mergeOpenings<T extends { x?: unknown; z?: unknown }>(base: T[], extra: T[]): T[] {
+  const merged = [...base];
+  for (const item of extra) {
+    const ix = Number(item.x);
+    const iz = Number(item.z);
+    const isDuplicate = merged.some((m) => Math.hypot(Number(m.x) - ix, Number(m.z) - iz) < OPENING_DEDUP_DIST);
+    if (!isDuplicate) merged.push(item);
+  }
+  return merged;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -450,7 +513,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const rawContent = await callGeminiVision(imageDataUrl, apiKey);
+    // Run the full analysis and a focused doors/windows recheck concurrently
+    // — two independent looks at the image catch openings (especially the
+    // main entrance) that a single pass regularly misses. The recheck is a
+    // reliability bonus, not a requirement: only the full-analysis pass can
+    // fail the request.
+    const [fullResult, recheckResult] = await Promise.allSettled([
+      callGeminiVision(imageDataUrl, apiKey, ANALYSIS_PROMPT, RESPONSE_SCHEMA),
+      callGeminiVision(imageDataUrl, apiKey, DOOR_WINDOW_RECHECK_PROMPT, DOOR_WINDOW_SCHEMA),
+    ]);
+
+    if (fullResult.status === 'rejected') {
+      throw fullResult.reason;
+    }
+    const rawContent = fullResult.value;
 
     let parsed: any;
     try {
@@ -464,6 +540,24 @@ export async function POST(req: NextRequest) {
         },
         { status: 502 },
       );
+    }
+
+    if (recheckResult.status === 'fulfilled') {
+      try {
+        const recheck = JSON.parse(extractJson(recheckResult.value));
+        parsed.doors = mergeOpenings(
+          Array.isArray(parsed.doors) ? parsed.doors : [],
+          Array.isArray(recheck.doors) ? recheck.doors : [],
+        );
+        parsed.windows = mergeOpenings(
+          Array.isArray(parsed.windows) ? parsed.windows : [],
+          Array.isArray(recheck.windows) ? recheck.windows : [],
+        );
+      } catch (e) {
+        console.error('[analyze-plan] door/window recheck JSON parse failed', e);
+      }
+    } else {
+      console.error('[analyze-plan] door/window recheck pass failed', recheckResult.reason);
     }
 
     const data = normalizePlan(parsed);
