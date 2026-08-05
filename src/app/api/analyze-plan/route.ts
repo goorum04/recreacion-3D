@@ -108,37 +108,53 @@ REAL-WORLD SIZE:
 Double-check before responding: every door and window must lie exactly on a wall you listed, and every wall corner must be shared exactly by the walls that meet there.`;
 
 /**
- * A second, focused pass that only looks for doors and windows — run
- * independently of ANALYSIS_PROMPT (not shown this model's answer) so it's
- * a genuinely separate attempt rather than the model just agreeing with
- * itself. Doors/windows are the detail most often dropped in a single
- * pass (especially the main entrance), and re-detecting them costs one
- * extra lightweight call. Results from both passes get merged, so if
- * either one finds an opening the other missed, it still ends up in the
- * model.
+ * A second pass that reviews the first pass's own doors/windows list
+ * against the image and returns a corrected, complete replacement —
+ * rather than guessing independently. An earlier version had this pass
+ * re-detect doors/windows blind (no visibility into pass 1's answer): two
+ * independent guesses at the same physical door rarely land on the exact
+ * same pixel coordinates, so proximity-based dedup let genuine duplicates
+ * through (reported by a user: doors appearing twice, extra doors "to the
+ * street"). Showing this pass what was already found lets the model
+ * explicitly dedupe/correct instead of the two passes just disagreeing.
  */
-const DOOR_WINDOW_RECHECK_PROMPT = `You are an expert architect. Look ONLY at doors and windows in this 2D floor plan image — ignore everything else.
+function buildDoorWindowRecheckPrompt(doors: any[], windows: any[]): string {
+  const fmt = (items: any[], extra: (i: any) => string) =>
+    items.length
+      ? items.map((it, i) => `  ${i + 1}. x=${it?.x}, z=${it?.z}, width=${it?.width}${extra(it)}`).join('\n')
+      : '  (none found)';
 
-Use a NORMALIZED grid from 0 to 100 on both axes: (0,0) is the top-left
-corner of the image, (100,100) is the bottom-right. X increases right, Z
-increases downward.
+  return `You are an expert architect reviewing a previous doors/windows analysis of this 2D floor plan image.
 
-Find every door (interior AND exterior) and every window:
-- A door is a gap in a wall, usually with a quarter-circle swing arc drawn
-  next to it. rotation in degrees: 0 = spans along X, 90 = spans along Z —
-  match the wall it's cut into. width in meters (0.7-0.9 interior, 0.9-1.0
-  main entrance).
-- CRITICAL: scan the ENTIRE outer perimeter for the main entrance door —
-  exactly one gap/swing cut into an exterior wall, the dwelling's only way
-  in from outside. It is very easy to miss on a first read; look at every
-  perimeter wall segment individually before concluding there is none.
-- A window is a set of parallel/double lines on an EXTERIOR wall only.
-  sillHeight typically 0.9, height typically 1.2-1.4, rotation same
-  convention as doors.
+Grid convention: NORMALIZED 0-100 on both axes, (0,0) = top-left corner of
+the image, (100,100) = bottom-right. X increases right, Z increases down.
 
-Return every door/window you can find, even ones a previous pass might
-already have listed — duplicates will be merged automatically, so
-completeness matters more than avoiding repeats.`;
+A first pass already found these doors:
+${fmt(doors, () => '')}
+
+And these windows:
+${fmt(windows, (w) => `, sillHeight=${w?.sillHeight}, height=${w?.height}`)}
+
+Carefully re-examine the image against this list and produce a corrected,
+COMPLETE replacement:
+1. If two or more entries above clearly refer to the SAME physical door or
+   window (imprecise coordinates from the first pass), keep only ONE entry
+   for it — do not output duplicates.
+2. Add any real door or window visible in the image that is missing from
+   the list above. CRITICAL: scan the entire OUTER PERIMETER specifically
+   for the main entrance — exactly ONE door swing/gap cut into an exterior
+   wall, the dwelling's only way in from outside. If the list above already
+   has an exterior door, verify there is really only one main entrance in
+   the image (a real house/apartment normally has exactly one, not two) —
+   if two listed entries both claim to be the entrance, they are almost
+   certainly the same door detected twice; merge them into one.
+3. Fix any entry whose position is clearly on the wrong wall or whose
+   width is implausible.
+
+Return the corrected doors and windows arrays. This is a REPLACEMENT for
+the list above, not an addition to it — include every opening that should
+exist in the final model, deduplicated, and nothing else.`;
+}
 
 /**
  * Gemini structured-output schema (OpenAPI subset). Forcing the response
@@ -474,21 +490,6 @@ function normalizePlan(raw: any): FloorPlanData {
   };
 }
 
-/** Grid-unit (0-100 scale) distance below which two openings are treated as the same physical door/window. */
-const OPENING_DEDUP_DIST = 6;
-
-/** Merges a second list of doors/windows into the first, dropping anything too close to an existing entry. */
-function mergeOpenings<T extends { x?: unknown; z?: unknown }>(base: T[], extra: T[]): T[] {
-  const merged = [...base];
-  for (const item of extra) {
-    const ix = Number(item.x);
-    const iz = Number(item.z);
-    const isDuplicate = merged.some((m) => Math.hypot(Number(m.x) - ix, Number(m.z) - iz) < OPENING_DEDUP_DIST);
-    if (!isDuplicate) merged.push(item);
-  }
-  return merged;
-}
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -513,20 +514,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Run the full analysis and a focused doors/windows recheck concurrently
-    // — two independent looks at the image catch openings (especially the
-    // main entrance) that a single pass regularly misses. The recheck is a
-    // reliability bonus, not a requirement: only the full-analysis pass can
-    // fail the request.
-    const [fullResult, recheckResult] = await Promise.allSettled([
-      callGeminiVision(imageDataUrl, apiKey, ANALYSIS_PROMPT, RESPONSE_SCHEMA),
-      callGeminiVision(imageDataUrl, apiKey, DOOR_WINDOW_RECHECK_PROMPT, DOOR_WINDOW_SCHEMA),
-    ]);
-
-    if (fullResult.status === 'rejected') {
-      throw fullResult.reason;
-    }
-    const rawContent = fullResult.value;
+    const rawContent = await callGeminiVision(imageDataUrl, apiKey, ANALYSIS_PROMPT, RESPONSE_SCHEMA);
 
     let parsed: any;
     try {
@@ -542,22 +530,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (recheckResult.status === 'fulfilled') {
-      try {
-        const recheck = JSON.parse(extractJson(recheckResult.value));
-        parsed.doors = mergeOpenings(
-          Array.isArray(parsed.doors) ? parsed.doors : [],
-          Array.isArray(recheck.doors) ? recheck.doors : [],
-        );
-        parsed.windows = mergeOpenings(
-          Array.isArray(parsed.windows) ? parsed.windows : [],
-          Array.isArray(recheck.windows) ? recheck.windows : [],
-        );
-      } catch (e) {
-        console.error('[analyze-plan] door/window recheck JSON parse failed', e);
+    // Second pass: shown the first pass's own doors/windows list (not a
+    // blind independent guess — see buildDoorWindowRecheckPrompt for why),
+    // asked to return a corrected, deduplicated replacement. A reliability
+    // bonus, not a requirement — any failure here just keeps pass 1's list.
+    try {
+      const origDoors = Array.isArray(parsed.doors) ? parsed.doors : [];
+      const origWindows = Array.isArray(parsed.windows) ? parsed.windows : [];
+      const recheckPrompt = buildDoorWindowRecheckPrompt(origDoors, origWindows);
+      const recheckContent = await callGeminiVision(imageDataUrl, apiKey, recheckPrompt, DOOR_WINDOW_SCHEMA);
+      const recheck = JSON.parse(extractJson(recheckContent));
+      const newDoors = Array.isArray(recheck.doors) ? recheck.doors : [];
+      const newWindows = Array.isArray(recheck.windows) ? recheck.windows : [];
+      // Guard against a broken recheck (e.g. a hallucinated empty response)
+      // silently wiping out a valid pass-1 result.
+      const plausible = newDoors.length > 0 || newWindows.length > 0 || (origDoors.length === 0 && origWindows.length === 0);
+      if (plausible) {
+        parsed.doors = newDoors;
+        parsed.windows = newWindows;
+      } else {
+        console.error('[analyze-plan] door/window recheck returned nothing plausible, keeping pass 1');
       }
-    } else {
-      console.error('[analyze-plan] door/window recheck pass failed', recheckResult.reason);
+    } catch (e) {
+      console.error('[analyze-plan] door/window recheck pass failed', e);
     }
 
     const data = normalizePlan(parsed);
