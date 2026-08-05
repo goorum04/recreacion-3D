@@ -11,8 +11,10 @@ import {
   Html,
   Stars,
   Environment,
+  Lightformer,
 } from '@react-three/drei';
-import { createXRStore, XR, XROrigin } from '@react-three/xr';
+import { EffectComposer, N8AO, Bloom } from '@react-three/postprocessing';
+import { createXRStore, XR, XROrigin, useXR } from '@react-three/xr';
 import * as THREE from 'three';
 import { BuildingModel } from './BuildingModel';
 import { MeasurementTool } from './MeasurementTool';
@@ -270,6 +272,53 @@ function onCanvasCreated({ gl }: { gl: THREE.WebGLRenderer }) {
 }
 
 /**
+ * A small synthetic studio lighting rig baked into a runtime cubemap, used
+ * only as an environment map for reflections (glass windows, polished
+ * floors). Built entirely from in-scene shapes rather than fetching an HDRI
+ * — keeps the app self-contained and avoids a third-party asset fetch at
+ * render time.
+ */
+function StudioEnvironment() {
+  return (
+    <Environment resolution={128} frames={1}>
+      <Lightformer form="rect" intensity={2.5} color="#ffffff" position={[0, 5, -6]} scale={[10, 4, 1]} />
+      <Lightformer form="rect" intensity={1.2} color="#dbeafe" position={[-6, 3, 4]} rotation={[0, Math.PI / 3, 0]} scale={[6, 3, 1]} />
+      <Lightformer form="rect" intensity={1.2} color="#fff7ed" position={[6, 3, 4]} rotation={[0, -Math.PI / 3, 0]} scale={[6, 3, 1]} />
+      <Lightformer form="ring" intensity={1.5} color="#ffffff" position={[0, 6, 0]} scale={8} />
+    </Environment>
+  );
+}
+
+/**
+ * Screen-space ambient occlusion + a light bloom pass — this is what takes
+ * the render from "flat game viewport" to "studio render". Skipped inside
+ * an active WebXR session: EffectComposer renders its own offscreen passes
+ * and doesn't compose correctly with the stereo XR frame loop.
+ */
+function PostFX() {
+  const session = useXR((xr) => xr.session);
+  // N8AO auto-detects whether it's the last pass in the composer to decide
+  // whether to gamma-correct its output; that detection is unreliable when
+  // another effect (Bloom) follows it, which otherwise blows the whole
+  // render out to white (a known upstream issue). Force it off explicitly.
+  const aoRef = useRef<{ configuration?: { gammaCorrection: boolean }; autosetGamma?: boolean } | null>(null);
+  useEffect(() => {
+    const pass = aoRef.current;
+    if (pass?.configuration) {
+      pass.configuration.gammaCorrection = false;
+      pass.autosetGamma = false;
+    }
+  });
+  if (session) return null;
+  return (
+    <EffectComposer enableNormalPass>
+      <N8AO ref={aoRef} aoRadius={1.1} distanceFalloff={1} intensity={2.2} quality="medium" />
+      <Bloom intensity={0.22} luminanceThreshold={0.88} luminanceSmoothing={0.25} mipmapBlur />
+    </EffectComposer>
+  );
+}
+
+/**
  * Registers the active camera + controls + scene + renderer into the
  * module-level camera bridge so the viewer UI (outside the Canvas) can
  * read/animate them and export the scene.
@@ -343,6 +392,8 @@ export function ArchiScene({
           <CameraRig view={view} walkMode={walkMode} data={data} focusRoomId={settings.focusRoomId} />
 
           <XROrigin position={[0, 0, 0]} />
+
+          <StudioEnvironment />
 
           {/* Lighting */}
           <ambientLight intensity={lit.ambient} />
@@ -450,6 +501,8 @@ export function ArchiScene({
               makeDefault
             />
           )}
+
+          <PostFX />
         </XR>
       </Suspense>
     </Canvas>

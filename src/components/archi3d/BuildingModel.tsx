@@ -3,8 +3,9 @@
 import { useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { Html, useCursor } from '@react-three/drei';
+import { Html, useCursor, MeshReflectorMaterial } from '@react-three/drei';
 import { buildWallSlabs, clamp, type WallSlab } from '@/lib/floor-plan-geometry';
+import { useProceduralMaterial, floorKindFor, type TextureKind } from '@/lib/procedural-textures';
 import type {
   FloorPlanData,
   DoorOpening,
@@ -44,6 +45,7 @@ function Wall({ slab, ceilingHeight, offsetX, offsetZ, color, wireframe, clippin
   // Slightly darker shade for baseboard/trim derived from the wall color.
   // (must be called before any early return to respect the rules of hooks)
   const trimColor = useMemo(() => shadeColor(color, -18), [color]);
+  const paint = useProceduralMaterial('paint', color, length, h, 1.4);
 
   if (length < 0.01 || h < 0.02) return null;
 
@@ -52,7 +54,18 @@ function Wall({ slab, ceilingHeight, offsetX, offsetZ, color, wireframe, clippin
       {/* Wall body */}
       <mesh position={[0, midY, 0]} castShadow receiveShadow>
         <boxGeometry args={[thickness, h, length]} />
-        <meshStandardMaterial color={color} roughness={0.9} wireframe={wireframe} clippingPlanes={clippingPlanes} clipShadows />
+        {wireframe ? (
+          <meshStandardMaterial color={color} roughness={0.9} wireframe clippingPlanes={clippingPlanes} />
+        ) : (
+          <meshStandardMaterial
+            color="#ffffff"
+            map={paint.map}
+            roughnessMap={paint.roughnessMap}
+            roughness={1}
+            clippingPlanes={clippingPlanes}
+            clipShadows
+          />
+        )}
       </mesh>
       {!wireframe && atFloor && (
         <mesh position={[0, yFrom + 0.06, 0]}>
@@ -277,14 +290,26 @@ function WindowMesh({ win, offsetX, offsetZ, open, onToggle, clippingPlanes = []
 /* Room floor patch + label                                            */
 /* ------------------------------------------------------------------ */
 
-function RoomFloor({ room, offsetX, offsetZ }: { room: Room; offsetX: number; offsetZ: number }) {
+function RoomFloor({
+  room,
+  offsetX,
+  offsetZ,
+  floorKind,
+}: {
+  room: Room;
+  offsetX: number;
+  offsetZ: number;
+  floorKind: TextureKind;
+}) {
   // Approximate a square patch from area for visual floor tint
   const side = Math.sqrt(room.area) * 0.9;
+  const color = room.color || '#e8e2d5';
+  const floor = useProceduralMaterial(floorKind, color, side, side, 0.7);
   return (
     <group position={[room.cx + offsetX, 0.005, room.cz + offsetZ]}>
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <planeGeometry args={[side, side]} />
-        <meshStandardMaterial color={room.color || '#e8e2d5'} roughness={0.95} />
+        <meshStandardMaterial color="#ffffff" map={floor.map} roughnessMap={floor.roughnessMap} roughness={1} />
       </mesh>
       <Html position={[0, 0.4, 0]} center distanceFactor={9} occlude={false}>
         <div className="pointer-events-none select-none whitespace-nowrap rounded-md bg-white/85 px-2.5 py-1 text-center shadow-md backdrop-blur-sm">
@@ -317,22 +342,46 @@ function Furniture({ item, offsetX, offsetZ, clippingPlanes = [] }: { item: Furn
     case 'sofa':
       return (
         <group position={[px, 0, pz]} rotation={[0, item.rotation, 0]} scale={s}>
-          <mesh position={[0, 0.22, 0]} castShadow receiveShadow>
-            <boxGeometry args={[2, 0.45, 0.85]} />
-            {mat('#6b7a8f')}
-          </mesh>
-          <mesh position={[0, 0.5, -0.35]} castShadow>
-            <boxGeometry args={[2, 0.5, 0.18]} />
+          {/* Base/frame */}
+          <mesh position={[0, 0.14, 0]} castShadow receiveShadow>
+            <boxGeometry args={[1.96, 0.2, 0.82]} />
             {mat('#5c6b80')}
           </mesh>
-          <mesh position={[-0.55, 0.35, 0.1]} castShadow>
-            <boxGeometry args={[0.4, 0.2, 0.6]} />
+          {/* Individual seat cushions (small gaps read as stitching seams) */}
+          {[-0.63, 0, 0.63].map((lx, i) => (
+            <mesh key={i} position={[lx, 0.32, 0.03]} castShadow receiveShadow>
+              <boxGeometry args={[0.58, 0.2, 0.78]} />
+              {mat('#6b7a8f')}
+            </mesh>
+          ))}
+          {/* Backrest cushions */}
+          {[-0.63, 0, 0.63].map((lx, i) => (
+            <mesh key={i} position={[lx, 0.56, -0.35]} castShadow>
+              <boxGeometry args={[0.58, 0.36, 0.16]} />
+              {mat('#657386')}
+            </mesh>
+          ))}
+          {/* Armrests */}
+          <mesh position={[-0.55, 0.4, 0.1]} castShadow>
+            <boxGeometry args={[0.4, 0.28, 0.66]} />
             {mat('#7a8aa0')}
           </mesh>
-          <mesh position={[0.55, 0.35, 0.1]} castShadow>
-            <boxGeometry args={[0.4, 0.2, 0.6]} />
+          <mesh position={[0.55, 0.4, 0.1]} castShadow>
+            <boxGeometry args={[0.4, 0.28, 0.66]} />
             {mat('#7a8aa0')}
           </mesh>
+          {/* Short wooden legs */}
+          {[
+            [-0.9, -0.32],
+            [0.9, -0.32],
+            [-0.9, 0.32],
+            [0.9, 0.32],
+          ].map(([lx, lz], i) => (
+            <mesh key={i} position={[lx, 0.02, lz]} castShadow>
+              <cylinderGeometry args={[0.025, 0.02, 0.08, 8]} />
+              {mat('#4a3a28', { roughness: 0.6 })}
+            </mesh>
+          ))}
         </group>
       );
     case 'table':
@@ -358,16 +407,43 @@ function Furniture({ item, offsetX, offsetZ, clippingPlanes = [] }: { item: Furn
     case 'bed':
       return (
         <group position={[px, 0, pz]} rotation={[0, item.rotation, 0]} scale={s}>
-          <mesh position={[0, 0.25, 0]} castShadow receiveShadow>
-            <boxGeometry args={[1.6, 0.4, 2]} />
+          {/* Legs */}
+          {[
+            [-0.72, -0.9],
+            [0.72, -0.9],
+            [-0.72, 0.9],
+            [0.72, 0.9],
+          ].map(([lx, lz], i) => (
+            <mesh key={i} position={[lx, 0.08, lz]} castShadow>
+              <boxGeometry args={[0.08, 0.16, 0.08]} />
+              <meshStandardMaterial color="#5a4530" roughness={0.6} />
+            </mesh>
+          ))}
+          {/* Base frame */}
+          <mesh position={[0, 0.2, 0]} castShadow receiveShadow>
+            <boxGeometry args={[1.62, 0.16, 2.02]} />
+            <meshStandardMaterial color="#8a7256" roughness={0.7} />
+          </mesh>
+          {/* Mattress */}
+          <mesh position={[0, 0.36, 0]} castShadow receiveShadow>
+            <boxGeometry args={[1.55, 0.22, 1.95]} />
+            <meshStandardMaterial color="#eee7da" roughness={0.85} />
+          </mesh>
+          {/* Duvet (covers the lower two-thirds) */}
+          <mesh position={[0, 0.48, 0.35]} castShadow receiveShadow>
+            <boxGeometry args={[1.58, 0.12, 1.2]} />
             <meshStandardMaterial color="#c9b8a0" roughness={0.9} />
           </mesh>
-          <mesh position={[0, 0.5, -0.65]} castShadow>
-            <boxGeometry args={[1.4, 0.25, 0.5]} />
-            <meshStandardMaterial color="#ffffff" roughness={1} />
-          </mesh>
-          <mesh position={[0, 0.5, -0.95]} castShadow>
-            <boxGeometry args={[1.65, 0.55, 0.12]} />
+          {/* Two pillows */}
+          {[-0.38, 0.38].map((lx, i) => (
+            <mesh key={i} position={[lx, 0.5, -0.72]} castShadow>
+              <boxGeometry args={[0.6, 0.16, 0.42]} />
+              <meshStandardMaterial color="#ffffff" roughness={1} />
+            </mesh>
+          ))}
+          {/* Headboard */}
+          <mesh position={[0, 0.55, -0.98]} castShadow>
+            <boxGeometry args={[1.68, 0.7, 0.1]} />
             <meshStandardMaterial color="#7a5c3e" roughness={0.7} />
           </mesh>
         </group>
@@ -399,11 +475,32 @@ function Furniture({ item, offsetX, offsetZ, clippingPlanes = [] }: { item: Furn
     case 'counter':
       return (
         <group position={[px, 0, pz]} rotation={[0, item.rotation, 0]} scale={s}>
-          <mesh position={[0, 0.45, 0]} castShadow receiveShadow>
-            <boxGeometry args={[1.8, 0.9, 0.6]} />
+          {/* Toe-kick (recessed base, common on real cabinetry) */}
+          <mesh position={[0, 0.05, 0.02]} castShadow>
+            <boxGeometry args={[1.76, 0.1, 0.56]} />
+            <meshStandardMaterial color="#2a2a2a" roughness={0.8} />
+          </mesh>
+          {/* Cabinet body */}
+          <mesh position={[0, 0.48, 0]} castShadow receiveShadow>
+            <boxGeometry args={[1.8, 0.8, 0.6]} />
             <meshStandardMaterial color="#d8d0c0" roughness={0.7} />
           </mesh>
-          <mesh position={[0, 0.92, 0]} castShadow>
+          {/* Door seams (three cabinet fronts) */}
+          {[-0.6, 0, 0.6].map((lx, i) => (
+            <mesh key={i} position={[lx, 0.48, 0.301]} castShadow>
+              <boxGeometry args={[0.56, 0.72, 0.01]} />
+              <meshStandardMaterial color="#c9c0ae" roughness={0.6} />
+            </mesh>
+          ))}
+          {/* Cabinet door handles */}
+          {[-0.42, 0.18, 0.78].map((lx, i) => (
+            <mesh key={i} position={[lx, 0.48, 0.32]} castShadow>
+              <boxGeometry args={[0.02, 0.14, 0.02]} />
+              <meshStandardMaterial color="#8a8a8a" metalness={0.6} roughness={0.3} />
+            </mesh>
+          ))}
+          {/* Countertop */}
+          <mesh position={[0, 0.92, 0]} castShadow receiveShadow>
             <boxGeometry args={[1.9, 0.06, 0.7]} />
             <meshStandardMaterial color="#3a3a3a" roughness={0.3} metalness={0.4} />
           </mesh>
@@ -412,13 +509,29 @@ function Furniture({ item, offsetX, offsetZ, clippingPlanes = [] }: { item: Furn
     case 'toilet':
       return (
         <group position={[px, 0, pz]} rotation={[0, item.rotation, 0]} scale={s}>
-          <mesh position={[0, 0.2, 0.1]} castShadow>
-            <boxGeometry args={[0.4, 0.4, 0.55]} />
+          {/* Pedestal base */}
+          <mesh position={[0, 0.1, 0.12]} castShadow>
+            <cylinderGeometry args={[0.13, 0.16, 0.2, 16]} />
             <meshStandardMaterial color="#f5f5f5" roughness={0.3} />
           </mesh>
-          <mesh position={[0, 0.45, -0.2]} castShadow>
-            <boxGeometry args={[0.42, 0.5, 0.12]} />
+          {/* Bowl (oval via non-uniform scale on a cylinder) */}
+          <mesh position={[0, 0.32, 0.1]} scale={[1, 0.5, 1.35]} castShadow>
+            <cylinderGeometry args={[0.22, 0.19, 0.22, 20]} />
+            <meshStandardMaterial color="#fbfbfb" roughness={0.25} />
+          </mesh>
+          {/* Seat ring */}
+          <mesh position={[0, 0.44, 0.1]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+            <torusGeometry args={[0.2, 0.03, 10, 24]} />
+            <meshStandardMaterial color="#ffffff" roughness={0.4} />
+          </mesh>
+          {/* Cistern/tank */}
+          <mesh position={[0, 0.55, -0.2]} castShadow>
+            <boxGeometry args={[0.42, 0.4, 0.14]} />
             <meshStandardMaterial color="#f5f5f5" roughness={0.3} />
+          </mesh>
+          <mesh position={[0, 0.76, -0.2]} castShadow>
+            <boxGeometry args={[0.46, 0.04, 0.18]} />
+            <meshStandardMaterial color="#ffffff" roughness={0.2} />
           </mesh>
         </group>
       );
@@ -586,6 +699,10 @@ export function BuildingModel({
   const groundW = width + 8;
   const groundD = depth + 8;
 
+  const floorKind = floorKindFor(floorColor);
+  const groundMaterial = useProceduralMaterial('grass', '#bcd6a0', groundW, groundD, 1.6);
+  const slabMaterial = useProceduralMaterial(floorKind, floorColor, width + 0.3, depth + 0.3, 0.7);
+
   // Doors/windows need a real gap cut into the wall they sit on — otherwise
   // they just float decoratively in front of a solid, closed wall. Doors
   // remove the wall entirely at their span; windows only remove the band
@@ -670,19 +787,55 @@ export function BuildingModel({
       {/* Exterior ground (lawn/terrace) */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]} receiveShadow>
         <planeGeometry args={[groundW, groundD]} />
-        <meshStandardMaterial color={wireframe ? '#2a2a2a' : '#bcd6a0'} roughness={1} />
+        {wireframe ? (
+          <meshStandardMaterial color="#2a2a2a" roughness={1} />
+        ) : (
+          <meshStandardMaterial
+            color="#ffffff"
+            map={groundMaterial.map}
+            roughnessMap={groundMaterial.roughnessMap}
+            roughness={1}
+          />
+        )}
       </mesh>
 
-      {/* Building floor slab */}
+      {/* Building floor slab — polished materials (marble) get a soft blurred reflection */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
         <planeGeometry args={[width + 0.3, depth + 0.3]} />
-        <meshStandardMaterial color={floorColor} roughness={0.95} clippingPlanes={clippingPlanes} clipShadows />
+        {wireframe ? (
+          <meshStandardMaterial color={floorColor} roughness={0.95} clippingPlanes={clippingPlanes} clipShadows />
+        ) : floorKind === 'marble' ? (
+          <MeshReflectorMaterial
+            color="#ffffff"
+            map={slabMaterial.map}
+            roughnessMap={slabMaterial.roughnessMap}
+            roughness={1}
+            resolution={512}
+            mixBlur={3}
+            mixStrength={0.7}
+            blur={[280, 90]}
+            minDepthThreshold={0.85}
+            maxDepthThreshold={1}
+            depthScale={0}
+            mirror={0}
+            clippingPlanes={clippingPlanes}
+          />
+        ) : (
+          <meshStandardMaterial
+            color="#ffffff"
+            map={slabMaterial.map}
+            roughnessMap={slabMaterial.roughnessMap}
+            roughness={1}
+            clippingPlanes={clippingPlanes}
+            clipShadows
+          />
+        )}
       </mesh>
 
       {/* Room floor tints + labels */}
       {showLabels &&
         data.rooms.map((r, i) => (
-          <RoomFloor key={`r-${i}`} room={r} offsetX={offsetX} offsetZ={offsetZ} />
+          <RoomFloor key={`r-${i}`} room={r} offsetX={offsetX} offsetZ={offsetZ} floorKind={floorKind} />
         ))}
 
       {/* Walls */}
