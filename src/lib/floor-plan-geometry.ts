@@ -79,6 +79,100 @@ export function snapToNearestWall(
   return best ? { x: best.x, z: best.z, rotation: best.rotation } : { x, z, rotation: 0 };
 }
 
+/**
+ * Approximate footprint radius (meters) per furniture type — matches the
+ * rough size of each <Furniture> mesh in BuildingModel.tsx. Used only to
+ * detect/resolve overlaps, so it doesn't need to be exact.
+ */
+const FURNITURE_RADIUS: Record<string, number> = {
+  sofa: 1.05,
+  table: 0.85,
+  bed: 1.05,
+  chair: 0.32,
+  counter: 1.0,
+  toilet: 0.3,
+  sink: 0.35,
+  fridge: 0.4,
+  tree: 0.45,
+};
+
+/**
+ * Pushes apart any two furniture pieces whose (approximate, circular)
+ * footprints overlap, so items the VLM placed on top of each other end up
+ * with realistic clearance instead — a real room's furniture never
+ * physically overlaps, even if the VLM's per-item position guess is rough.
+ */
+export function resolveFurnitureOverlaps<T extends { type: string; x: number; z: number }>(
+  items: T[],
+): T[] {
+  const pts = items.map((it) => ({ x: it.x, z: it.z, r: FURNITURE_RADIUS[it.type] ?? 0.4 }));
+  for (let pass = 0; pass < 8; pass++) {
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        const a = pts[i];
+        const b = pts[j];
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const dist = Math.hypot(dx, dz);
+        const minDist = (a.r + b.r) * 0.92;
+        if (dist < 1e-4) {
+          a.x -= 0.05;
+          b.x += 0.05;
+        } else if (dist < minDist) {
+          const overlap = (minDist - dist) / 2;
+          const ux = dx / dist;
+          const uz = dz / dist;
+          a.x -= ux * overlap;
+          a.z -= uz * overlap;
+          b.x += ux * overlap;
+          b.z += uz * overlap;
+        }
+      }
+    }
+  }
+  return items.map((it, i) => ({ ...it, x: pts[i].x, z: pts[i].z }));
+}
+
+/**
+ * Pulls every chair to sit snugly beside the nearest table (within 1.6m)
+ * and face it, instead of trusting the VLM's independent, often
+ * disconnected-looking guess for each chair's position/rotation. Run this
+ * AFTER resolveFurnitureOverlaps so the deliberate close placement here
+ * doesn't get treated as an overlap and pushed back apart.
+ */
+export function snapChairsToTables<T extends { type: string; x: number; z: number; rotation: number }>(
+  items: T[],
+): T[] {
+  const tables = items.filter((it) => it.type === 'table');
+  if (tables.length === 0) return items;
+  const MAX_DIST = 1.6;
+  const OFFSET = 0.55;
+
+  return items.map((it) => {
+    if (it.type !== 'chair') return it;
+    let nearest: T | null = null;
+    let nearestDist = Infinity;
+    for (const t of tables) {
+      const d = Math.hypot(t.x - it.x, t.z - it.z);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearest = t;
+      }
+    }
+    if (!nearest || nearestDist > MAX_DIST) return it;
+
+    const dx = it.x - nearest.x;
+    const dz = it.z - nearest.z;
+    const dist = Math.hypot(dx, dz) || 1;
+    const ux = dx / dist;
+    const uz = dz / dist;
+    // <Furniture>'s chair backrest sits at local -Z, so it faces local +Z;
+    // point that toward the table (the direction from chair to table).
+    const rotation = Math.atan2(-ux, -uz);
+    return { ...it, x: nearest.x + ux * OFFSET, z: nearest.z + uz * OFFSET, rotation };
+  });
+}
+
 export interface OpeningSpan {
   x: number;
   z: number;

@@ -8,7 +8,13 @@ import type {
   FurnitureItem,
   AnalyzePlanResponse,
 } from '@/lib/floor-plan-types';
-import { clamp, orthogonalizeWalls, snapToNearestWall } from '@/lib/floor-plan-geometry';
+import {
+  clamp,
+  orthogonalizeWalls,
+  snapToNearestWall,
+  resolveFurnitureOverlaps,
+  snapChairsToTables,
+} from '@/lib/floor-plan-geometry';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -72,6 +78,13 @@ DOORS:
   along the Z axis — always match the orientation of the wall it's cut into.
 - width is the door width in meters (typical 0.7-0.9 for interior doors, 0.9-1.0 for a main entrance).
 - Include every door you can see, including closet and bathroom doors.
+- CRITICAL — the main entrance door is easy to miss and MUST be included:
+  scan the entire OUTER PERIMETER specifically for one door swing/gap cut
+  into an exterior wall (it usually opens into the living room, dining room,
+  or a small entry hallway, and is often labeled "Entrada"/"Entrance" or
+  drawn with a longer swing arc than interior doors). If you find no
+  perimeter door at all, look again before giving up — every dwelling has
+  at least one way in.
 
 WINDOWS:
 - Place windows ON exterior walls only, exactly where window symbols
@@ -82,6 +95,10 @@ WINDOWS:
 
 FURNITURE:
 - Detect furniture symbols (bed, sofa, table, chairs, toilet, sink, fridge, kitchen counter, plants) and place them roughly where drawn, inside the correct room.
+- Furniture pieces must NOT overlap each other — leave realistic clearance
+  (at least 0.4m) between separate items, the way an actual room is
+  furnished. A chair belongs immediately next to its table, oriented to
+  face it, not floating elsewhere in the room.
 - rotation in degrees.
 
 REAL-WORLD SIZE:
@@ -345,7 +362,7 @@ function normalizePlan(raw: any): FloorPlanData {
   const validFurnitureTypes = [
     'sofa', 'table', 'bed', 'chair', 'counter', 'toilet', 'sink', 'fridge', 'tree',
   ];
-  const furniture: FurnitureItem[] = Array.isArray(raw?.furniture)
+  const rawFurniture: FurnitureItem[] = Array.isArray(raw?.furniture)
     ? raw.furniture.map((f: any) => ({
         type: (validFurnitureTypes.includes(f?.type) ? f.type : 'chair') as FurnitureItem['type'],
         x: toMeters(clamp(Number(f?.x) || 50, 0, 100), planWidth),
@@ -354,6 +371,13 @@ function normalizePlan(raw: any): FloorPlanData {
         scale: clamp(Number(f?.scale) || 1, 0.3, 3),
       }))
     : [];
+
+  // The VLM places each furniture item independently, which regularly
+  // produces overlapping pieces (a chair on top of its table, a table
+  // clipping into a sofa) and chairs left floating with an arbitrary
+  // rotation instead of facing their table. Fix both up in a light
+  // physical pass rather than trusting the raw per-item guesses.
+  const furniture: FurnitureItem[] = snapChairsToTables(resolveFurnitureOverlaps(rawFurniture));
 
   // Fallback: if VLM returned no walls, build a simple rectangular shell
   if (walls.length === 0) {
