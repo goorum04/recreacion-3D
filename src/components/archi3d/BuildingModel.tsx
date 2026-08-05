@@ -339,43 +339,104 @@ function Furniture({ item, offsetX, offsetZ, clippingPlanes = [] }: { item: Furn
   );
 
   switch (item.type) {
-    case 'sofa':
+    case 'sofa': {
+      const variant = item.variant ?? 'straight';
+      if (variant === 'straight') {
+        return (
+          <group position={[px, 0, pz]} rotation={[0, item.rotation, 0]} scale={s}>
+            {/* Base/frame */}
+            <mesh position={[0, 0.14, 0]} castShadow receiveShadow>
+              <boxGeometry args={[1.96, 0.2, 0.82]} />
+              {mat('#5c6b80')}
+            </mesh>
+            {/* Individual seat cushions (small gaps read as stitching seams) */}
+            {[-0.63, 0, 0.63].map((lx, i) => (
+              <mesh key={i} position={[lx, 0.32, 0.03]} castShadow receiveShadow>
+                <boxGeometry args={[0.58, 0.2, 0.78]} />
+                {mat('#6b7a8f')}
+              </mesh>
+            ))}
+            {/* Backrest cushions */}
+            {[-0.63, 0, 0.63].map((lx, i) => (
+              <mesh key={i} position={[lx, 0.56, -0.35]} castShadow>
+                <boxGeometry args={[0.58, 0.36, 0.16]} />
+                {mat('#657386')}
+              </mesh>
+            ))}
+            {/* Armrests */}
+            <mesh position={[-0.55, 0.4, 0.1]} castShadow>
+              <boxGeometry args={[0.4, 0.28, 0.66]} />
+              {mat('#7a8aa0')}
+            </mesh>
+            <mesh position={[0.55, 0.4, 0.1]} castShadow>
+              <boxGeometry args={[0.4, 0.28, 0.66]} />
+              {mat('#7a8aa0')}
+            </mesh>
+            {/* Short wooden legs */}
+            {[
+              [-0.9, -0.32],
+              [0.9, -0.32],
+              [-0.9, 0.32],
+              [0.9, 0.32],
+            ].map(([lx, lz], i) => (
+              <mesh key={i} position={[lx, 0.02, lz]} castShadow>
+                <cylinderGeometry args={[0.025, 0.02, 0.08, 8]} />
+                {mat('#4a3a28', { roughness: 0.6 })}
+              </mesh>
+            ))}
+          </group>
+        );
+      }
+
+      // L-shaped chaise longue / corner sectional. `dir` picks which end
+      // (as seen sitting on the main run facing local +Z) the chaise foot
+      // extends from: +1 for chaise-right, -1 for chaise-left.
+      const dir = variant === 'chaise-right' ? 1 : -1;
+      const armX = -dir * 0.95; // armrest at the end opposite the chaise
+      const chaiseX = dir * 0.44; // chaise foot center X
+      const chaiseZ = 0.24; // chaise foot extends further into the room than the main run
       return (
         <group position={[px, 0, pz]} rotation={[0, item.rotation, 0]} scale={s}>
-          {/* Base/frame */}
+          {/* Base: main seating run */}
           <mesh position={[0, 0.14, 0]} castShadow receiveShadow>
-            <boxGeometry args={[1.96, 0.2, 0.82]} />
+            <boxGeometry args={[1.7, 0.2, 0.82]} />
             {mat('#5c6b80')}
           </mesh>
-          {/* Individual seat cushions (small gaps read as stitching seams) */}
-          {[-0.63, 0, 0.63].map((lx, i) => (
+          {/* Base: chaise foot, sharing the corner with the main run */}
+          <mesh position={[chaiseX, 0.14, chaiseZ]} castShadow receiveShadow>
+            <boxGeometry args={[0.82, 0.2, 1.3]} />
+            {mat('#5c6b80')}
+          </mesh>
+          {/* Seat cushions on the main run */}
+          {[-0.43, 0.43].map((lx, i) => (
             <mesh key={i} position={[lx, 0.32, 0.03]} castShadow receiveShadow>
-              <boxGeometry args={[0.58, 0.2, 0.78]} />
+              <boxGeometry args={[0.8, 0.2, 0.78]} />
               {mat('#6b7a8f')}
             </mesh>
           ))}
-          {/* Backrest cushions */}
-          {[-0.63, 0, 0.63].map((lx, i) => (
+          {/* Chaise cushion */}
+          <mesh position={[chaiseX, 0.32, chaiseZ]} castShadow receiveShadow>
+            <boxGeometry args={[0.76, 0.2, 1.24]} />
+            {mat('#6b7a8f')}
+          </mesh>
+          {/* Backrest along the main run's back edge only (the chaise foot is open) */}
+          {[-0.43, 0.43].map((lx, i) => (
             <mesh key={i} position={[lx, 0.56, -0.35]} castShadow>
-              <boxGeometry args={[0.58, 0.36, 0.16]} />
+              <boxGeometry args={[0.8, 0.36, 0.16]} />
               {mat('#657386')}
             </mesh>
           ))}
-          {/* Armrests */}
-          <mesh position={[-0.55, 0.4, 0.1]} castShadow>
-            <boxGeometry args={[0.4, 0.28, 0.66]} />
-            {mat('#7a8aa0')}
-          </mesh>
-          <mesh position={[0.55, 0.4, 0.1]} castShadow>
+          {/* Armrest at the end opposite the chaise */}
+          <mesh position={[armX, 0.4, 0.1]} castShadow>
             <boxGeometry args={[0.4, 0.28, 0.66]} />
             {mat('#7a8aa0')}
           </mesh>
           {/* Short wooden legs */}
           {[
-            [-0.9, -0.32],
-            [0.9, -0.32],
-            [-0.9, 0.32],
-            [0.9, 0.32],
+            [-dir * 0.78, -0.32],
+            [-dir * 0.78, 0.32],
+            [chaiseX - dir * 0.3, chaiseZ + 0.55],
+            [chaiseX + dir * 0.3, chaiseZ + 0.55],
           ].map(([lx, lz], i) => (
             <mesh key={i} position={[lx, 0.02, lz]} castShadow>
               <cylinderGeometry args={[0.025, 0.02, 0.08, 8]} />
@@ -384,6 +445,7 @@ function Furniture({ item, offsetX, offsetZ, clippingPlanes = [] }: { item: Furn
           ))}
         </group>
       );
+    }
     case 'table':
       return (
         <group position={[px, 0, pz]} rotation={[0, item.rotation, 0]} scale={s}>

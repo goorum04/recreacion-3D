@@ -78,13 +78,22 @@ DOORS:
   along the Z axis — always match the orientation of the wall it's cut into.
 - width is the door width in meters (typical 0.7-0.9 for interior doors, 0.9-1.0 for a main entrance).
 - Include every door you can see, including closet and bathroom doors.
-- CRITICAL — the main entrance door is easy to miss and MUST be included:
-  scan the entire OUTER PERIMETER specifically for one door swing/gap cut
-  into an exterior wall (it usually opens into the living room, dining room,
-  or a small entry hallway, and is often labeled "Entrada"/"Entrance" or
-  drawn with a longer swing arc than interior doors). If you find no
-  perimeter door at all, look again before giving up — every dwelling has
-  at least one way in.
+- ONLY report a door where you can actually see a swing arc, leaf symbol,
+  or clear gap cut into a wall line. NEVER add a door just because you
+  expect one should logically exist somewhere — a false door is just as
+  wrong as a missing one. If a room has no visible opening in the image,
+  leave it without a door rather than guessing one in.
+- Look carefully at the WHOLE outer perimeter once for an exterior door
+  (the dwelling's entrance from outside, often near the living/dining room
+  or a small entry hall, sometimes labeled "Entrada"). But this image may
+  show only part of a building or an upper floor with no ground-level
+  entrance of its own (e.g. accessed only via an internal staircase/landing
+  — look for "Escalera"/"Distribuidor" labels as a hint) — in that case it
+  is completely normal and correct to report zero exterior doors. Do not
+  invent one to satisfy this instruction.
+- Never report two different doors for the same real opening. If you are
+  about to list a second door within roughly 1 meter of one you already
+  listed on the same wall, it is the same physical door — keep only one.
 
 WINDOWS:
 - Place windows ON exterior walls only, exactly where window symbols
@@ -99,6 +108,14 @@ FURNITURE:
   (at least 0.4m) between separate items, the way an actual room is
   furnished. A chair belongs immediately next to its table, oriented to
   face it, not floating elsewhere in the room.
+- For a "sofa": look at its actual outline in the plan. If it is a plain
+  rectangle, set variant to "straight". If it is L-shaped (a chaise longue
+  / corner sectional, common in living rooms), set variant to
+  "chaise-left" or "chaise-right" depending on which side the extra chaise
+  section sticks out on, as seen sitting on the main seat run facing
+  forward (the direction "rotation" points it). Get this right — a
+  straight sofa rendered for an L-shaped one (or vice versa) is a visible
+  mismatch with the real plan.
 - rotation in degrees.
 
 REAL-WORLD SIZE:
@@ -137,23 +154,27 @@ ${fmt(windows, (w) => `, sillHeight=${w?.sillHeight}, height=${w?.height}`)}
 
 Carefully re-examine the image against this list and produce a corrected,
 COMPLETE replacement:
-1. If two or more entries above clearly refer to the SAME physical door or
-   window (imprecise coordinates from the first pass), keep only ONE entry
-   for it — do not output duplicates.
-2. Add any real door or window visible in the image that is missing from
-   the list above. CRITICAL: scan the entire OUTER PERIMETER specifically
-   for the main entrance — exactly ONE door swing/gap cut into an exterior
-   wall, the dwelling's only way in from outside. If the list above already
-   has an exterior door, verify there is really only one main entrance in
-   the image (a real house/apartment normally has exactly one, not two) —
-   if two listed entries both claim to be the entrance, they are almost
-   certainly the same door detected twice; merge them into one.
+1. DEDUPLICATE FIRST: if two or more entries above are within roughly 1
+   meter of each other (about 8-10 grid units at typical room scale), they
+   are almost certainly the SAME physical door/window detected twice with
+   slightly different coordinates — keep only ONE entry for it. This
+   applies to every door including a possible entrance: two "entrance"
+   candidates near each other are one door, not two. A real dwelling
+   normally has exactly one main entrance, never two.
+2. Add a door/window only if you can actually SEE it in the image (a swing
+   arc, leaf symbol, or clear gap in a wall) — never add one just because
+   you think one should logically exist. This image may show only part of
+   a building or a floor with no ground-level entrance of its own (look for
+   "Escalera"/"Distribuidor" labels as a hint it's an upper floor reached
+   by an internal staircase) — reporting zero exterior doors is completely
+   normal and correct in that case. A missing door is a smaller mistake
+   than an invented one.
 3. Fix any entry whose position is clearly on the wrong wall or whose
    width is implausible.
 
 Return the corrected doors and windows arrays. This is a REPLACEMENT for
 the list above, not an addition to it — include every opening that should
-exist in the final model, deduplicated, and nothing else.`;
+exist in the final model, deduplicated, and nothing invented.`;
 }
 
 /**
@@ -241,6 +262,10 @@ const RESPONSE_SCHEMA = {
           x: { type: 'NUMBER' },
           z: { type: 'NUMBER' },
           rotation: { type: 'NUMBER' },
+          variant: {
+            type: 'STRING',
+            enum: ['straight', 'chaise-left', 'chaise-right'],
+          },
         },
         required: ['type', 'x', 'z'],
       },
@@ -426,6 +451,7 @@ function normalizePlan(raw: any): FloorPlanData {
   const validFurnitureTypes = [
     'sofa', 'table', 'bed', 'chair', 'counter', 'toilet', 'sink', 'fridge', 'tree',
   ];
+  const validSofaVariants = ['straight', 'chaise-left', 'chaise-right'];
   const rawFurniture: FurnitureItem[] = Array.isArray(raw?.furniture)
     ? raw.furniture.map((f: any) => ({
         type: (validFurnitureTypes.includes(f?.type) ? f.type : 'chair') as FurnitureItem['type'],
@@ -433,6 +459,7 @@ function normalizePlan(raw: any): FloorPlanData {
         z: toMeters(clamp(Number(f?.z) || 50, 0, 100), planDepth),
         rotation: toRad(Number(f?.rotation) || 0),
         scale: clamp(Number(f?.scale) || 1, 0.3, 3),
+        variant: (validSofaVariants.includes(f?.variant) ? f.variant : 'straight') as FurnitureItem['variant'],
       }))
     : [];
 

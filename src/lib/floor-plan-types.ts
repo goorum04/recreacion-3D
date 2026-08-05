@@ -63,6 +63,13 @@ export interface FurnitureItem {
   rotation: number;
   /** scale multiplier */
   scale?: number;
+  /**
+   * Shape variant, currently only meaningful for 'sofa': a straight sofa,
+   * or an L-shaped chaise longue/sectional with the chaise extending to
+   * the left or right of the main seating run (as seen sitting on it
+   * facing forward, i.e. facing local +Z before `rotation` is applied).
+   */
+  variant?: 'straight' | 'chaise-left' | 'chaise-right';
 }
 
 export interface DimensionInfo {
