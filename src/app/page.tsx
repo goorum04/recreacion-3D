@@ -285,45 +285,28 @@ function Landing({
             </div>
           </div>
 
-          {/* Visual mock */}
+          {/* Real render from the 3D viewer — not a mockup */}
           <div className="relative">
             <div className="relative mx-auto aspect-[4/3] w-full max-w-md overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-2xl shadow-stone-300/50 dark:border-stone-700 dark:bg-stone-900 dark:shadow-black/50">
-              {/* Faux 3D isometric preview built with CSS */}
-              <div className="absolute inset-0 bg-gradient-to-br from-sky-100 via-white to-amber-50 dark:from-stone-800 dark:via-stone-900 dark:to-stone-800" />
-              <div className="absolute inset-0 flex items-center justify-center p-6">
-                <div className="relative h-full w-full">
-                  {/* floor */}
-                  <div className="absolute left-1/2 top-1/2 h-40 w-56 -translate-x-1/2 -translate-y-1/2 rotate-[8deg] transform">
-                    <div className="grid h-full w-full grid-cols-3 grid-rows-2 gap-1.5 opacity-90">
-                      {[
-                        'bg-amber-100 dark:bg-amber-900/40',
-                        'bg-emerald-100 dark:bg-emerald-900/40',
-                        'bg-stone-100 dark:bg-stone-700/40',
-                        'bg-violet-100 dark:bg-violet-900/40',
-                        'bg-sky-100 dark:bg-sky-900/40',
-                        'bg-rose-100 dark:bg-rose-900/40',
-                      ].map((c, i) => (
-                        <div key={i} className={`rounded-sm ${c}`} />
-                      ))}
-                    </div>
-                  </div>
-                  {/* walls (CSS) */}
-                  <div className="absolute left-1/2 top-[28%] h-3 w-56 -translate-x-1/2 rounded bg-stone-300 shadow dark:bg-stone-600" />
-                  <div className="absolute left-1/2 top-[68%] h-3 w-56 -translate-x-1/2 rounded bg-stone-300 shadow dark:bg-stone-600" />
-                  <div className="absolute left-[26%] top-1/2 h-40 w-3 -translate-y-1/2 rounded bg-stone-300 shadow dark:bg-stone-600" />
-                  <div className="absolute left-[72%] top-1/2 h-40 w-3 -translate-y-1/2 rounded bg-stone-300 shadow dark:bg-stone-600" />
-                  {/* VR badge */}
-                  <div className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-stone-900 px-3 py-1 text-[10px] font-semibold text-white dark:bg-amber-500 dark:text-stone-900">
-                    <Glasses className="h-3 w-3" /> VR Ready
-                  </div>
-                  {/* floating chips — moved INSIDE the card to prevent overflow */}
-                  <div className="absolute left-3 top-3 flex items-center gap-1.5 rounded-lg border border-stone-200/80 bg-white/95 px-2.5 py-1.5 text-[11px] font-semibold text-stone-700 shadow-md backdrop-blur dark:border-stone-700 dark:bg-stone-800/95 dark:text-stone-200">
-                    <Ruler className="h-3.5 w-3.5 text-amber-500" /> 86 m²
-                  </div>
-                  <div className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-lg border border-stone-200/80 bg-white/95 px-2.5 py-1.5 text-[11px] font-semibold text-stone-700 shadow-md backdrop-blur dark:border-stone-700 dark:bg-stone-800/95 dark:text-stone-200">
-                    <Layers3 className="h-3.5 w-3.5 text-emerald-500" /> 6 hab.
-                  </div>
-                </div>
+              <img
+                src="/hero-render.jpg"
+                alt="Modelo 3D reconstruido a partir de un plano de planta, mostrado en el visor de ArchiVR"
+                className="absolute inset-0 h-full w-full object-cover"
+                width={1000}
+                height={750}
+                loading="eager"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/10 via-transparent to-transparent" />
+              {/* VR badge */}
+              <div className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-stone-900 px-3 py-1 text-[10px] font-semibold text-white dark:bg-amber-500 dark:text-stone-900">
+                <Glasses className="h-3 w-3" /> VR Ready
+              </div>
+              {/* floating chips */}
+              <div className="absolute left-3 top-3 flex items-center gap-1.5 rounded-lg border border-stone-200/80 bg-white/95 px-2.5 py-1.5 text-[11px] font-semibold text-stone-700 shadow-md backdrop-blur dark:border-stone-700 dark:bg-stone-800/95 dark:text-stone-200">
+                <Ruler className="h-3.5 w-3.5 text-amber-500" /> 99 m²
+              </div>
+              <div className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-lg border border-stone-200/80 bg-white/95 px-2.5 py-1.5 text-[11px] font-semibold text-stone-700 shadow-md backdrop-blur dark:border-stone-700 dark:bg-stone-800/95 dark:text-stone-200">
+                <Layers3 className="h-3.5 w-3.5 text-emerald-500" /> 6 hab.
               </div>
               {/* scan line */}
               <div className="absolute inset-x-0 top-0 h-0.5 animate-[scan_3s_ease-in-out_infinite] bg-amber-400 shadow-[0_0_12px_2px_rgba(245,158,11,0.6)]" />
